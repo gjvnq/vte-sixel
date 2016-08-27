@@ -32,6 +32,7 @@ G_BEGIN_DECLS
 #define _VTE_CAP_OSC _VTE_CAP_ESC "]"	/* Operating System Command */
 #define _VTE_CAP_PM  _VTE_CAP_ESC "^"	/* Privacy Message */
 #define _VTE_CAP_APC _VTE_CAP_ESC "_"	/* Application Program Command */
+#define _VTE_CAP_DCS _VTE_CAP_ESC "P"	/* Device Control String */
 #define _VTE_CAP_SS2 _VTE_CAP_ESC "N"	/* Single-shift to G2 */
 #define _VTE_CAP_SS3 _VTE_CAP_ESC "O"	/* Single-shift to G3 */
 

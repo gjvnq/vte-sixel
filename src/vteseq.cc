@@ -31,8 +31,10 @@
 #include <vte/vte.h>
 #include "vteinternal.hh"
 #include "vtegtk.hh"
+#include "vteimage.hh"
 #include "caps.h"
 #include "debug.h"
+#include "sixel.h"
 
 #define BEL "\007"
 #define ST _VTE_CAP_ST
@@ -693,6 +695,11 @@ vte_sequence_handler_decset_internal(VteTerminalPrivate *that,
 		 NULL, NULL,},
 		/* 67: disallowed, backspace key policy is set by user. */
 		{67, 0, 0, 0, 0, 0, NULL, NULL,},
+		/* 80: SIXEL display mode(DECSDM). */
+		{80, PRIV_OFFSET(m_sixel_display_mode), 0, 0,
+		 FALSE,
+		 TRUE,
+		 NULL, NULL,},
 		/* 1000: Send-coords-on-button. */
 		{1000, 0, PRIV_OFFSET(m_mouse_tracking_mode), 0,
 		 0,
@@ -770,8 +777,18 @@ vte_sequence_handler_decset_internal(VteTerminalPrivate *that,
                  0,
                  vte_sequence_handler_normal_screen_and_restore_cursor,
                  vte_sequence_handler_save_cursor_and_alternate_screen,},
+		/* 1070: private color register mode. */
+		{1070, PRIV_OFFSET(m_sixel_use_private_register), 0, 0,
+		 FALSE,
+		 TRUE,
+		 NULL, NULL,},
 		/* 2004: Bracketed paste mode. */
 		{2004, PRIV_OFFSET(m_bracketed_paste_mode), 0, 0,
+		 FALSE,
+		 TRUE,
+		 NULL, NULL,},
+		/* 8452: SIXEL-scrolls-right mode. */
+		{8452, PRIV_OFFSET(m_sixel_scrolls_right), 0, 0,
 		 FALSE,
 		 TRUE,
 		 NULL, NULL,},
@@ -2312,7 +2329,7 @@ static void
 vte_sequence_handler_send_primary_device_attributes (VteTerminalPrivate *that, GValueArray *params)
 {
 	/* Claim to be a VT220 with only national character set support. */
-        that->feed_child("\e[?62;c", -1);
+        that->feed_child("\e[?62;4c", -1);
 }
 
 /* Send terminal ID. */
@@ -2943,6 +2960,171 @@ vte_sequence_handler_screen_alignment_test (VteTerminalPrivate *that, GValueArra
         that->seq_screen_alignment_test();
 }
 
+static void
+vte_sequence_handler_device_control_string (VteTerminalPrivate *that, GValueArray *params)
+{
+	GValue *value;
+	char *dcs = NULL;
+	char *p;
+	glong cmd = 0;
+	gint param;
+	size_t nparams = 0;
+	gint dcsparams[DECSIXEL_PARAMS_MAX];
+
+	value = g_value_array_get_nth(params, 0);
+	if (!value)
+		return;
+	if (G_VALUE_HOLDS_STRING(value)) {
+		/* Copy the string into the buffer. */
+		dcs = g_value_dup_string(value);
+	}
+	else if (G_VALUE_HOLDS_POINTER(value)) {
+		dcs = that->ucs4_to_utf8((const guchar *)g_value_get_pointer (value));
+	}
+	if (! dcs)
+		return;
+
+	for (p = dcs; p; ++p) {
+		switch (*p) {
+		case ' ' ... '/':
+			cmd = cmd << 8 | *p;
+			if (cmd > (1 << 24))
+				goto end;
+			break;
+		case '0' ... '9':
+			if (param < 0)
+				param = 0;
+			param = param * 10 + *p - '0';
+			break;
+		case ';':
+			if (param < 0)
+				param = 0;
+			if (nparams < sizeof(dcsparams) / sizeof(dcsparams[0]))
+				dcsparams[nparams++] = param;
+			param = 0;
+			break;
+		case '@' ... '~':
+			cmd = cmd << 8 | *p;
+			goto dispatch;
+		default:
+		    goto end;
+		}
+	}
+
+dispatch:
+	switch (cmd) {
+	case 'q':
+		that->seq_load_sixel(dcs);
+		break;
+	default:
+		break;
+	}
+
+end:
+	g_free(dcs);
+}
+
+void
+VteTerminalPrivate::seq_load_sixel(char const* dcs)
+{
+	unsigned char *pixels = NULL;
+	auto fg = get_color(VTE_DEFAULT_FG);
+	auto bg = get_color(VTE_DEFAULT_BG);
+	int nfg = fg->red >> 8 | fg->green >> 8 << 8 | fg->blue >> 8 << 16;
+	int nbg = bg->red >> 8 | bg->green >> 8 << 8 | bg->blue >> 8 << 16;
+	VteImage *image = NULL;
+	glong left, top, width, height;
+	glong pixelwidth, pixelheight, stride;
+	glong i;
+	VteScreen *screen;
+	cairo_surface_t *surface;
+	VteImage *prev, *cur;
+
+	/* Parse images */
+	if (sixel_parser_init(&m_sixel_state, nfg, nbg, m_sixel_use_private_register) < 0) {
+		sixel_parser_deinit(&m_sixel_state);
+		return;
+	}
+	if (sixel_parser_parse(&m_sixel_state, (unsigned char *)dcs, strlen(dcs)) < 0) {
+		sixel_parser_deinit(&m_sixel_state);
+		return;
+	}
+	pixels = (unsigned char *)g_malloc(m_sixel_state.image.width * m_sixel_state.image.height * 4);
+	if (! pixels) {
+		sixel_parser_deinit(&m_sixel_state);
+		return;
+	}
+	if (sixel_parser_finalize(&m_sixel_state, pixels) < 0) {
+		sixel_parser_deinit(&m_sixel_state);
+		return;
+	}
+	sixel_parser_deinit(&m_sixel_state);
+
+	/* Create a VteImage */
+	if (m_sixel_display_mode)
+		seq_home_cursor();
+	width = (m_sixel_state.image.width + m_char_width - 1) / m_char_width;
+	height = (m_sixel_state.image.height + m_char_height - 1) / m_char_height;
+	pixelwidth = m_sixel_state.image.width;
+	pixelheight = m_sixel_state.image.height;
+	stride = m_sixel_state.image.width * 4;
+	surface = cairo_image_surface_create_for_data(pixels, CAIRO_FORMAT_ARGB32, pixelwidth, pixelheight, stride);
+	if (! surface)
+		return;
+	left = m_screen->cursor.col;
+	top = m_screen->cursor.row;
+	image = new VteImage(surface, left, top, width, height);
+	if (! image)
+		return;
+	screen = m_screen;
+
+	/* composition */
+	prev = NULL;
+	cur = screen->image;
+	while (cur) {
+		if (image->includes(cur)) {
+			if (prev) {
+				prev->next = cur->next;
+				delete cur;
+				cur = prev->next;
+			} else {
+				prev = cur;
+				cur = cur->next;
+				delete prev;
+				prev = NULL;
+			}
+		} else if (image && cur->includes(image)) {
+			cur->combine(image, m_char_width, m_char_height);
+			delete image;
+			image = NULL;
+			prev = cur;
+			cur = cur->next;
+		} else {
+			prev = cur;
+			cur = cur->next;
+		}
+	}
+	if (prev)
+		prev->next = image;
+	else
+		screen->image = image;
+
+	/* Erase characters on the image */
+	for (i = 0; i < height; ++i) {
+		seq_erase_characters(width);
+		if (i == height - 1) {
+			if (m_sixel_scrolls_right)
+				seq_cursor_forward(width);
+			else
+				cursor_down();
+		} else {
+			cursor_down();
+		}
+	}
+	if (m_sixel_display_mode)
+		seq_home_cursor();
+}
+
 void
 VteTerminalPrivate::seq_screen_alignment_test()
 {
@@ -3403,6 +3585,55 @@ vte_sequence_handler_iterm2_1337(VteTerminalPrivate *that, GValueArray *params)
          */
 }
 
+/* graphics attributes */
+static void
+vte_sequence_handler_graphics_attributes(VteTerminalPrivate *that, GValueArray *params)
+{
+	if (params == NULL || params->n_values != 3) {
+		return;
+	}
+	GValue* value = g_value_array_get_nth(params, 0);
+	if (!G_VALUE_HOLDS_LONG(value)) {
+		return;
+	}
+	auto param = g_value_get_long(value);
+
+	char buf[128];
+	long arg1, arg2;
+	arg1 = arg2 = -1;
+	if (params->n_values > 1) {
+		value = g_value_array_get_nth(params, 1);
+		if (G_VALUE_HOLDS_LONG(value)) {
+			arg1 = g_value_get_long(value);
+		}
+	}
+	if (params->n_values > 2) {
+		value = g_value_array_get_nth(params, 2);
+		if (G_VALUE_HOLDS_LONG(value)) {
+			arg2 = g_value_get_long(value);
+		}
+	}
+
+	switch (arg1) {
+	case 1:
+		switch (arg2) {
+		case 1:
+			that->feed_child(_VTE_CAP_CSI "?1;0;256S", -1);
+			break;
+		case 2:
+			that->feed_child(_VTE_CAP_CSI "?1;0;256S", -1);
+			break;
+		case 3:
+			that->feed_child(_VTE_CAP_CSI "?1;3;0S", -1);
+			break;
+		default:
+			break;
+		}
+	default:
+                g_snprintf(buf, sizeof(buf), _VTE_CAP_CSI "?%ld;1;0S", arg1);
+		break;
+	}
+}
 
 /* Lookup tables */
 

@@ -96,7 +96,7 @@ struct vteseq_n_struct {
 #"set-text-property-21", VTE_SEQUENCE_HANDLER_NULL
 #"set-text-property-2L", VTE_SEQUENCE_HANDLER_NULL
 "cursor-preceding-line", VTE_SEQUENCE_HANDLER(vte_sequence_handler_cursor_preceding_line)
-#"device-control-string", VTE_SEQUENCE_HANDLER_NULL
+"device-control-string", VTE_SEQUENCE_HANDLER(vte_sequence_handler_device_control_string)
 "screen-alignment-test", VTE_SEQUENCE_HANDLER(vte_sequence_handler_screen_alignment_test)
 #"select-locator-events", VTE_SEQUENCE_HANDLER_NULL
 #"set-conformance-level", VTE_SEQUENCE_HANDLER_NULL
@@ -170,3 +170,4 @@ struct vteseq_n_struct {
 "set-current-file-uri", VTE_SEQUENCE_HANDLER(vte_sequence_handler_set_current_file_uri)
 "urxvt-777", VTE_SEQUENCE_HANDLER(vte_sequence_handler_urxvt_777)
 "iterm2-1337", VTE_SEQUENCE_HANDLER(vte_sequence_handler_iterm2_1337)
+"graphics-attributes", VTE_SEQUENCE_HANDLER(vte_sequence_handler_graphics_attributes)

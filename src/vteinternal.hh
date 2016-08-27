@@ -28,6 +28,8 @@
 
 #include "vtepcre2.h"
 #include "vteregexinternal.hh"
+#include "vteimage.hh"
+#include "sixel.h"
 
 typedef enum {
         VTE_REGEX_CURSOR_GDKCURSOR,
@@ -119,6 +121,7 @@ struct _VteScreen {
         VteVisualPosition cursor;  /* absolute value, from the beginning of the terminal history */
         double scroll_delta;	/* scroll offset */
         long insert_delta;	/* insertion offset */
+        VteImage *image;	/* SIXEL image list */
 
         /* Stuff saved along with the cursor */
         struct {
@@ -430,6 +433,12 @@ public:
         double m_mouse_smooth_scroll_delta;
 
         gboolean m_focus_tracking_mode;
+
+        /* SIXEL feature */
+        gboolean m_sixel_display_mode;
+        gboolean m_sixel_scrolls_right;
+        gboolean m_sixel_use_private_register;
+        sixel_state_t m_sixel_state;
 
 	/* State variables for handling match checks. */
         char* m_match_contents;
@@ -1173,7 +1182,7 @@ public:
                                                       int index_fallback,
                                                       int osc,
                                                       char const *terminator);
-
+        inline void seq_load_sixel(char const* p);
         void subscribe_accessible_events();
         void select_text(vte::grid::column_t start_col,
                          vte::grid::row_t start_row,

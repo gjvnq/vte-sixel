@@ -7781,8 +7781,10 @@ VteTerminalPrivate::VteTerminalPrivate(VteTerminal *t) :
 	/* Initialize the screens and histories. */
 	_vte_ring_init (m_alternate_screen.row_data, m_row_count, FALSE);
 	m_screen = &m_alternate_screen;
+	m_screen->image = NULL;
 	_vte_ring_init (m_normal_screen.row_data, VTE_SCROLLBACK_INIT, TRUE);
 	m_screen = &m_normal_screen;
+	m_screen->image = NULL;
 
 	reset_default_attributes();
 
@@ -7868,6 +7870,9 @@ VteTerminalPrivate::VteTerminalPrivate(VteTerminal *t) :
         /* Initialize the saved cursor. */
         save_cursor(&m_normal_screen);
         save_cursor(&m_alternate_screen);
+
+	/* Initialize SIXEL color register */
+	sixel_parser_set_default_color(&m_sixel_state);
 
 	/* Matching data. */
 	m_match_regexes = g_array_new(FALSE, TRUE,
@@ -8234,6 +8239,12 @@ VteTerminalPrivate::~VteTerminalPrivate()
 	/* Clear the output histories. */
 	_vte_ring_fini(m_normal_screen.row_data);
 	_vte_ring_fini(m_alternate_screen.row_data);
+
+	/* Clear SIXEL images */
+	if (m_normal_screen.image)
+		m_normal_screen.image->destroy_recursively();
+	if (m_alternate_screen.image)
+		m_alternate_screen.image->destroy_recursively();
 
 	/* Free conversion descriptors. */
 	if (m_outgoing_conv != VTE_INVALID_CONV) {
@@ -9491,6 +9502,45 @@ VteTerminalPrivate::widget_draw(cairo_t *cr)
 			 allocated_width, allocated_height,
                          get_color(VTE_DEFAULT_BG), m_background_alpha);
 
+	/* Draw SIXEL images */
+	if (m_screen->image) {
+		VteImage *img = m_screen->image;
+		VteImage *prev = NULL;
+		while (img && img->storage_is_full()) {
+			VteImage *tmp = img->next;
+			delete img;
+			img = tmp;
+		}
+		while (img) {
+			if (img->top + img->height < m_screen->scroll_delta - m_scrollback_lines) {
+				/* Collect unused images */
+				if (prev)
+					prev->next = img->next;
+				else
+					m_screen->image = img->next;
+				VteImage *tmp = img->next;
+				delete img;
+				img = tmp;
+			}
+			else if (img->top + img->height < first_displayed_row() || img->top > last_displayed_row()) {
+				/* Hibernate images that scroll out of view */
+				img->hibernate();
+				prev = img;
+				img = img->next;
+			}
+			else {
+				/* Display images */
+				int x = m_padding.left + img->left * m_char_width;
+				int y = m_padding.top + (img->top - m_screen->scroll_delta) * m_char_height;
+				img->paint(cr, x, y);
+				invalidate_cells(img->left, img->width, img->top - m_screen->scroll_delta, img->height);
+				//invalidate_all();
+				prev = img;
+				img = img->next;
+			}
+		}
+	}
+
         /* Clip vertically, for the sake of smooth scrolling. We want the top and bottom paddings to be unused.
          * Don't clip horizontally so that antialiasing can legally overflow to the right padding. */
         cairo_save(cr);
@@ -10036,6 +10086,13 @@ VteTerminalPrivate::reset(bool clear_tabstops,
                 m_screen->scroll_delta = -1;
                 queue_adjustment_value_changed(m_screen->insert_delta);
 		adjust_adjustments_full();
+		/* clear SIXEL images */
+		if (m_normal_screen.image)
+			m_normal_screen.image->destroy_recursively();
+		m_normal_screen.image = NULL;
+		if (m_alternate_screen.image)
+			m_alternate_screen.image->destroy_recursively();
+		m_alternate_screen.image = NULL;
 	}
         /* DECSCUSR cursor style */
         m_cursor_style = VTE_CURSOR_STYLE_TERMINAL_DEFAULT;
@@ -10097,6 +10154,14 @@ VteTerminalPrivate::reset(bool clear_tabstops,
 	m_modifiers = 0;
 	/* Reset miscellaneous stuff. */
 	m_bracketed_paste_mode = FALSE;
+	/* Reset SIXEL display mode */
+	m_sixel_display_mode = FALSE;
+	/* Reset SIXEL-scrolls-right mode */
+	m_sixel_scrolls_right = FALSE;
+	/* Reset privae color register mode */
+	m_sixel_use_private_register = FALSE;
+	/* Reset SIXEL color register */
+	sixel_parser_set_default_color(&m_sixel_state);
         /* Reset the saved cursor. */
         save_cursor(&m_normal_screen);
         save_cursor(&m_alternate_screen);
