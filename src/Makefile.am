@@ -61,6 +61,10 @@ libvte_@VTE_API_MAJOR_VERSION@_@VTE_API_MINOR_VERSION@_la_SOURCES = \
 	reaper.hh \
 	ring.cc \
 	ring.h \
+	sixel.cc \
+	sixel.h \
+	sixel_hls.cc \
+	sixel_hls.h \
 	table.cc \
 	table.h \
 	vte.cc \
@@ -73,6 +77,8 @@ libvte_@VTE_API_MAJOR_VERSION@_@VTE_API_MINOR_VERSION@_la_SOURCES = \
 	vtedraw.hh \
 	vtegtk.cc \
 	vtegtk.hh \
+	vteimage.cc \
+	vteimage.hh \
 	vteinternal.hh \
 	vtepcre2.h \
 	vtepty-private.h \

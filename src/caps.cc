@@ -27,6 +27,7 @@
 #define OSC _VTE_CAP_OSC
 #define PM  _VTE_CAP_PM
 #define APC _VTE_CAP_APC
+#define DCS _VTE_CAP_DCS
 
 #define ENQ "\005"
 #define BEL "\007"
@@ -151,6 +152,10 @@ const char _vte_xterm_capability_strings[] =
         ENTRY(CSI "%dP", "delete-characters")
         ENTRY(CSI "S", "scroll-up")
         ENTRY(CSI "%dS", "scroll-up")
+        ENTRY(CSI "?S", "graphics-attributes")
+        ENTRY(CSI "?%dS", "graphics-attributes")
+        ENTRY(CSI "?%d;%dS", "graphics-attributes")
+        ENTRY(CSI "?%d;%d;%dS", "graphics-attributes")
         ENTRY(CSI "T", "scroll-down")
         ENTRY(CSI "%dT", "scroll-down")
         ENTRY(CSI "%d;%d;%d;%d;%dT", "initiate-hilite-mouse-tracking")
