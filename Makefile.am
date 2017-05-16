@@ -2,7 +2,7 @@ NULL =
 
 ACLOCAL_AMFLAGS = -I m4
 
-SUBDIRS = src po doc perf
+SUBDIRS = src bindings po doc perf
 
 EXTRA_DIST = \
 	HACKING \
@@ -22,10 +22,10 @@ pkgconfig_DATA = vte-$(VTE_API_VERSION).pc
 DISTCHECK_CONFIGURE_FLAGS = \
 	--enable-gtk-doc \
 	--enable-introspection \
-	--enable-vala \
-	--enable-test-application \
+	--disable-vala \
+	--disable-test-application \
 	--disable-silent-rules \
-	--with-gtk=3.0
+	--with-gtk=$(GTK_API_VERSION)
 
 MAINTAINERCLEANFILES = \
 	$(GITIGNORE_MAINTAINERCLEANFILES_TOPLEVEL) \

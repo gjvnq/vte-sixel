@@ -196,7 +196,7 @@ class Window : Gtk.ApplicationWindow
   };
 
   private const GLib.ActionEntry[] action_entries = {
-    { "copy",        action_copy_cb            },
+    { "copy",        action_copy_cb,       "s" },
     { "copy-match",  action_copy_match_cb, "s" },
     { "paste",       action_paste_cb           },
     { "reset",       action_reset_cb,      "b" },
@@ -324,6 +324,7 @@ class Window : Gtk.ApplicationWindow
     if (App.Options.word_char_exceptions != null)
       terminal.set_word_char_exceptions(App.Options.word_char_exceptions);
 
+    terminal.set_allow_hyperlink(!App.Options.no_hyperlink);
     terminal.set_audible_bell(App.Options.audible);
     terminal.set_cjk_ambiguous_width(App.Options.get_cjk_ambiguous_width());
     terminal.set_cursor_blink_mode(App.Options.get_cursor_blink_mode());
@@ -563,9 +564,12 @@ class Window : Gtk.ApplicationWindow
 
   /* Callbacks */
 
-  private void action_copy_cb()
+  private void action_copy_cb(GLib.SimpleAction action, GLib.Variant? parameter)
   {
-    terminal.copy_clipboard();
+    size_t len;
+    unowned string str = parameter.get_string(out len);
+    
+    terminal.copy_clipboard_format(str == "html" ? Vte.Format.HTML : Vte.Format.TEXT);
   }
 
   private void action_copy_match_cb(GLib.SimpleAction action, GLib.Variant? parameter)
@@ -624,10 +628,14 @@ class Window : Gtk.ApplicationWindow
       return false;
 
     var menu = new GLib.Menu();
-    menu.append("_Copy", "win.copy");
+    menu.append("_Copy", "win.copy::text");
+    menu.append("Copy As _HTML", "win.copy::html");
 
 #if VALA_0_24
     if (event != null) {
+      var hyperlink = terminal.hyperlink_check_event(event);
+      if (hyperlink != null)
+        menu.append("Copy _Hyperlink", "win.copy-match::" + hyperlink);
       var match = terminal.match_check_event(event, null);
       if (match != null)
         menu.append("Copy _Match", "win.copy-match::" + match);
@@ -834,6 +842,7 @@ class App : Gtk.Application
     public static bool no_context_menu = false;
     public static bool no_double_buffer = false;
     public static bool no_geometry_hints = false;
+    public static bool no_hyperlink = false;
     public static bool no_pcre = false;
     public static bool no_rewrap = false;
     public static bool no_shell = false;
@@ -1021,6 +1030,8 @@ class App : Gtk.Application
         "Disable double-buffering", null },
       { "no-geometry-hints", 'G', 0, OptionArg.NONE, ref no_geometry_hints,
         "Allow the terminal to be resized to any dimension, not constrained to fit to an integer multiple of characters", null },
+      { "no-hyperlink", 'H', 0, OptionArg.NONE, ref no_hyperlink,
+        "Disable hyperlinks", null },
       { "no-rewrap", 'R', 0, OptionArg.NONE, ref no_rewrap,
         "Disable rewrapping on resize", null },
       { "no-shell", 'S', 0, OptionArg.NONE, ref no_shell,

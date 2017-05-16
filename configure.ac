@@ -1,6 +1,6 @@
 m4_define([version_major],0)
-m4_define([version_minor],47)
-m4_define([version_micro],0)
+m4_define([version_minor],49)
+m4_define([version_micro],2)
 m4_define([version_triplet],version_major.version_minor.version_micro)
 
 AC_PREREQ([2.63])
@@ -23,6 +23,60 @@ fi
 AM_MAINTAINER_MODE([enable])
 
 ################################################################################
+# GTK+
+################################################################################
+
+AC_MSG_CHECKING([which gtk+ version to compile against])
+AC_ARG_WITH([gtk],
+  [AS_HELP_STRING([--with-gtk=3.0|3.90],[which gtk+ version to compile against (default: 3.0)])],
+  [case "$with_gtk" in
+     3.0) ;;
+     3.9[02468]) ;;
+     2.0) AC_MSG_ERROR([unsupported gtk version $with_gtk specified]) ;;
+     *) AC_MSG_ERROR([invalid gtk version $with_gtk specified]) ;;
+   esac],
+  [with_gtk=3.0])
+AC_MSG_RESULT([$with_gtk])
+
+case "$with_gtk" in
+  3.0) GTK_API_VERSION=3.0
+       GTK_API_MAJOR_VERSION=3
+       GTK_API_MINOR_VERSION=0
+       GTK_REQUIRED=3.8.0
+       GTK_MIN_REQUIRED=3.8
+       GTK_MAX_ALLOWED=3.20
+       VTE_API_MAJOR_VERSION=2
+       VTE_API_MINOR_VERSION=91
+       GLADE_API_VERSION=2.0
+       ;;
+  3.9[02468]) GTK_API_VERSION=4.0
+              GTK_API_MAJOR_VERSION=4
+              GTK_API_MINOR_VERSION=0
+              GTK_REQUIRED=3.89.0
+              GTK_MIN_REQUIRED=3.8
+              GTK_MAX_ALLOWED=3.20
+              VTE_API_MAJOR_VERSION=3
+              VTE_API_MINOR_VERSION=91
+              # GLADE_API_VERSION=4.0 ?
+              # remove the following when they're ready
+              enable_glade_catalogue=no
+              enable_introspection=no
+              enable_vala=no
+              enable_test_application=no
+             ;;
+esac
+
+VTE_API_VERSION=$VTE_API_MAJOR_VERSION.$VTE_API_MINOR_VERSION
+
+AC_SUBST([VTE_API_VERSION])
+AC_SUBST([VTE_API_VERSION_U],[AS_TR_SH([$VTE_API_VERSION])])
+AC_SUBST([VTE_API_MAJOR_VERSION])
+AC_SUBST([VTE_API_MINOR_VERSION])
+AC_SUBST([GTK_API_VERSION])
+AC_SUBST([GTK_API_MAJOR_VERSION])
+AC_SUBST([GTK_API_MINOR_VERSION])
+
+################################################################################
 # Libtool versioning
 ################################################################################
 m4_define([lt_revision], m4_if(m4_eval(version_minor%2),1,0,version_micro))
@@ -32,23 +86,6 @@ m4_define([lt_triplet],lt_current:lt_revision:lt_age)
 
 LT_VERSION_INFO="lt_triplet()"
 AC_SUBST([LT_VERSION_INFO])
-
-################################################################################
-# GTK+
-################################################################################
-
-VTE_API_MAJOR_VERSION=2
-VTE_API_MINOR_VERSION=91
-VTE_API_VERSION=$VTE_API_MAJOR_VERSION.$VTE_API_MINOR_VERSION
-GTK_API_VERSION=3.0
-GTK_REQUIRED=3.8.0
-GLADE_API_VERSION=2.0
-
-AC_SUBST([VTE_API_VERSION])
-AC_SUBST([VTE_API_VERSION_U],[AS_TR_SH([$VTE_API_VERSION])])
-AC_SUBST([VTE_API_MAJOR_VERSION])
-AC_SUBST([VTE_API_MINOR_VERSION])
-AC_SUBST([GTK_API_VERSION])
 
 ################################################################################
 
@@ -255,7 +292,13 @@ AC_CHECK_FUNCS([cfmakeraw fork setsid setpgid getpgid tcgetattr tcsetattr])
 
 # Misc I/O routines.
 AC_CHECK_FUNCS([pread pwrite])
+AC_CHECK_FUNCS([explicit_bzero])
 
+# for vtespawn
+AC_CHECK_HEADERS([sys/resource.h])
+AC_CHECK_FUNCS([fdwalk])
+
+# Math functions
 AC_CHECK_FUNC(floor,,AC_CHECK_LIB(m,floor,LIBS=["$LIBS -lm"]))
 AC_CHECK_FUNCS([ceil floor round])
 
@@ -322,37 +365,42 @@ if test -z "$enable_introspection"; then
   enable_introspection=yes
 fi
 
-GOBJECT_INTROSPECTION_CHECK([0.9.0])
+m4_ifdef([GOBJECT_INTROSPECTION_CHECK],
+  [GOBJECT_INTROSPECTION_CHECK([0.9.0])],
+  [if test "$enable_introspection" = "yes"; then
+    AC_MSG_ERROR([[Introspection requested but M4 macros not installed. Try --disable-introspection]])
+   fi
+   AM_CONDITIONAL([HAVE_INTROSPECTION],[false])])
 
 # No automagic please!
 if test -z "$enable_vala"; then
   enable_vala=yes
 fi
 
-VAPIGEN_CHECK([0.18])
+m4_ifdef([VAPIGEN_CHECK],
+  [VAPIGEN_CHECK([0.24])],
+  [if test "$enable_vala" = "yes"; then
+     AC_MSG_ERROR([[Vala requested but M4 macros not installed. Try --disable-vala]])
+   fi
+   AM_CONDITIONAL([ENABLE_VAPIGEN],[false])])
 
 # ****************
 # Test Application
 # ****************
 
-AC_MSG_CHECKING([whether to build the test application])
+AC_MSG_CHECKING([whether to install the vala test application])
 AC_ARG_ENABLE([test-application],
-        [AS_HELP_STRING([--disable-test-application],[Disable test application])],
+        [AS_HELP_STRING([--disable-test-application],[Disable installing the vala test application])],
         [],[enable_test_application=$enable_vala])
 AC_MSG_RESULT([$enable_test_application])
 
 AM_PROG_VALAC([0.24.0],[],[
-  if test "$enable_test_application" != "no"; then
-    AC_MSG_ERROR([vala support enabled by vala compiler not found])
+  if test "$enable_vala" != "no"; then
+    AC_MSG_ERROR([Vala requested but vala compiler >= 0.24.0 not found])
   fi])
 
-if test "$enable_test_application" = "yes"; then
-  PKG_CHECK_MODULES([GTK_3_16],[gtk+-3.0 >= 3.16],[have_gtk_3_16=yes],[have_gtk_3_16=no])
-  AM_PROG_VALAC([0.31.1],[have_vala_0_31=yes],[have_vala_0_31=no])
-else
-  have_gtk_3_16=no
-  have_vala_0_31=no
-fi
+PKG_CHECK_MODULES([GTK_3_16],[gtk+-$GTK_API_VERSION >= 3.16],[have_gtk_3_16=yes],[have_gtk_3_16=no])
+AM_PROG_VALAC([0.31.1],[have_vala_0_31=yes],[have_vala_0_31=no])
 
 AM_CONDITIONAL([ENABLE_TEST_APPLICATION],[test "$enable_test_application" = "yes"])
 AM_CONDITIONAL([HAVE_GTK_3_16],[test "$have_gtk_3_16" = "yes"])
@@ -367,6 +415,14 @@ if test -z "$GLIB_COMPILE_RESOURCES"; then
   AC_PATH_PROG([GLIB_COMPILE_RESOURCES],[glib-compile-resources],[])
   if test -z "$GLIB_COMPILE_RESOURCES"; then
     AC_MSG_ERROR([glib-compile-resources not found])
+  fi
+fi
+
+AC_ARG_VAR([GPERF],[the gperf programme])
+if test -z "$GPERF"; then
+  AC_PATH_PROG([GPERF],[gperf],[])
+  if test -z "$GPERF"; then
+    AC_MSG_ERROR([gperf not found])
   fi
 fi
 
@@ -403,6 +459,9 @@ Makefile
 src/Makefile
 src/vte.gresource.xml
 src/vte/vteversion.h
+bindings/Makefile
+bindings/gir/Makefile
+bindings/vala/Makefile
 perf/Makefile
 po/Makefile.in
 doc/Makefile

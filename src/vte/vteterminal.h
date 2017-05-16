@@ -140,18 +140,25 @@ _VTE_PUBLIC
 void vte_terminal_watch_child (VteTerminal *terminal,
                                GPid child_pid) _VTE_GNUC_NONNULL(1);
 
+typedef void (* VteTerminalSpawnAsyncCallback) (VteTerminal *terminal,
+                                                GPid pid,
+                                                GError *error,
+                                                gpointer user_data);
+
 _VTE_PUBLIC
-gboolean vte_terminal_spawn_sync(VteTerminal *terminal,
-                                 VtePtyFlags pty_flags,
-                                 const char *working_directory,
-                                 char **argv,
-                                 char **envv,
-                                 GSpawnFlags spawn_flags,
-                                 GSpawnChildSetupFunc child_setup,
-                                 gpointer child_setup_data,
-                                 GPid *child_pid /* out */,
-                                 GCancellable *cancellable,
-                                 GError **error) _VTE_GNUC_NONNULL(1) _VTE_GNUC_NONNULL(4);
+void vte_terminal_spawn_async(VteTerminal *terminal,
+                              VtePtyFlags pty_flags,
+                              const char *working_directory,
+                              char **argv,
+                              char **envv,
+                              GSpawnFlags spawn_flags_,
+                              GSpawnChildSetupFunc child_setup,
+                              gpointer child_setup_data,
+                              GDestroyNotify child_setup_data_destroy,
+                              int timeout,
+                              GCancellable *cancellable,
+                              VteTerminalSpawnAsyncCallback callback,
+                              gpointer user_data) _VTE_GNUC_NONNULL(1) _VTE_GNUC_NONNULL(4);
 
 /* Send data to the terminal to display, or to the terminal's forked command
  * to handle in some way.  If it's 'cat', they should be the same. */
@@ -171,7 +178,8 @@ void vte_terminal_feed_child_binary(VteTerminal *terminal,
 /* Copy currently-selected text to the clipboard, or from the clipboard to
  * the terminal. */
 _VTE_PUBLIC
-void vte_terminal_copy_clipboard(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
+void vte_terminal_copy_clipboard_format(VteTerminal *terminal,
+                                        VteFormat format) _VTE_GNUC_NONNULL(1);
 _VTE_PUBLIC
 void vte_terminal_paste_clipboard(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
 _VTE_PUBLIC
@@ -282,6 +290,12 @@ void vte_terminal_set_allow_bold(VteTerminal *terminal,
 _VTE_PUBLIC
 gboolean vte_terminal_get_allow_bold(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
 
+_VTE_PUBLIC
+void vte_terminal_set_allow_hyperlink(VteTerminal *terminal,
+                                      gboolean allow_hyperlink) _VTE_GNUC_NONNULL(1);
+_VTE_PUBLIC
+gboolean vte_terminal_get_allow_hyperlink(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
+
 /* Check if the terminal is the current selection owner. */
 _VTE_PUBLIC
 gboolean vte_terminal_get_has_selection(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
@@ -334,6 +348,10 @@ _VTE_PUBLIC
 void vte_terminal_get_cursor_position(VteTerminal *terminal,
 				      glong *column,
                                       glong *row) _VTE_GNUC_NONNULL(1);
+
+_VTE_PUBLIC
+char *vte_terminal_hyperlink_check_event(VteTerminal *terminal,
+                                         GdkEvent *event) _VTE_GNUC_NONNULL(1) _VTE_GNUC_NONNULL(2) G_GNUC_MALLOC;
 
 /* Add a matching expression, returning the tag the widget assigns to that
  * expression. */

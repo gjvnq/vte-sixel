@@ -1,3 +1,4 @@
+
 /*
  * Copyright (C) 2001-2004 Red Hat, Inc.
  *
@@ -388,6 +389,17 @@ void
 VteTerminalPrivate::seq_switch_screen(VteScreen *new_screen)
 {
         /* if (new_screen == m_screen) return; ? */
+
+        /* The two screens use different hyperlink pools, so carrying on the idx
+         * wouldn't make sense and could lead to crashes.
+         * Ideally we'd carry the target URI itself, but I'm just lazy.
+         * Also, run a GC before we switch away from that screen. */
+        m_hyperlink_hover_idx = _vte_ring_get_hyperlink_at_position(m_screen->row_data, -1, -1, true, NULL);
+        g_assert (m_hyperlink_hover_idx == 0);
+        m_hyperlink_hover_uri = NULL;
+        emit_hyperlink_hover_uri_changed(NULL);  /* FIXME only emit if really changed */
+        m_defaults.attr.hyperlink_idx = _vte_ring_get_hyperlink_idx(m_screen->row_data, NULL);
+        g_assert (m_defaults.attr.hyperlink_idx == 0);
 
         /* cursor.row includes insert_delta, adjust accordingly */
         auto cr = m_screen->cursor.row - m_screen->insert_delta;
@@ -936,8 +948,8 @@ VteTerminalPrivate::seq_decset_internal_post(long setting,
 	case 1001:
 	case 1002:
 	case 1003:
-		/* Make the pointer visible. */
-                set_pointer_visible(true);
+                /* Mouse pointer might change. */
+                apply_mouse_cursor();
 		break;
 	case 66:
 		_vte_debug_print(VTE_DEBUG_KEYBOARD, set ?
@@ -1448,6 +1460,7 @@ VteTerminalPrivate::seq_dc()
                                 _vte_row_data_fill(rowdata, &m_fill_defaults, m_column_count);
                                 len = m_column_count;
 			}
+                        rowdata->attr.soft_wrapped = 0;
 			/* Repaint this row. */
                         invalidate_cells(col, len - col,
                                          m_screen->cursor.row, 1);
@@ -1677,7 +1690,7 @@ static void
 vte_sequence_handler_next_line (VteTerminalPrivate *that, GValueArray *params)
 {
         that->set_cursor_column(0);
-	that->cursor_down();
+        that->cursor_down(true);
 }
 
 /* No-op. */
@@ -1834,7 +1847,7 @@ vte_sequence_handler_line_feed (VteTerminalPrivate *that, GValueArray *params)
 {
         that->ensure_cursor_is_onscreen();
 
-	that->cursor_down();
+        that->cursor_down(true);
 }
 
 /* Cursor up 1 line, with scrolling. */
@@ -1942,7 +1955,7 @@ VteTerminalPrivate::seq_tab()
 		 */
 
 		old_len = _vte_row_data_length (rowdata);
-                _vte_row_data_fill (rowdata, &basic_cell.cell, newcol);
+                _vte_row_data_fill (rowdata, &basic_cell, newcol);
 
 		/* Insert smart tab if there's nothing in the line after
 		 * us, not even empty cells (with non-default background
@@ -2143,7 +2156,7 @@ vte_sequence_handler_character_attributes (VteTerminalPrivate *that, GValueArray
 		param = g_value_get_long(value);
 		switch (param) {
 		case 0:
-			that->reset_default_attributes();
+                        that->reset_default_attributes(false);
 			break;
 		case 1:
                         that->m_defaults.attr.bold = 1;
@@ -2287,7 +2300,7 @@ vte_sequence_handler_character_attributes (VteTerminalPrivate *that, GValueArray
 	}
 	/* If we had no parameters, default to the defaults. */
 	if (i == 0) {
-		that->reset_default_attributes();
+                that->reset_default_attributes(false);
 	}
 	/* Save the new colors. */
         that->m_color_defaults.attr.fore = that->m_defaults.attr.fore;
@@ -2464,6 +2477,108 @@ VteTerminalPrivate::set_current_file_uri_changed(char* uri /* adopted */)
 {
         g_free(m_current_file_uri_changed);
         m_current_file_uri_changed = uri;
+}
+
+/* Handle OSC 8 hyperlinks.
+ * See bug 779734 and https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda. */
+static void
+vte_sequence_handler_set_current_hyperlink (VteTerminalPrivate *that, GValueArray *params)
+{
+        GValue *value;
+        char *hyperlink_params;
+        char *uri;
+
+        hyperlink_params = NULL;
+        uri = NULL;
+        if (params != NULL && params->n_values > 1) {
+                value = g_value_array_get_nth(params, 0);
+
+                if (G_VALUE_HOLDS_POINTER(value)) {
+                        hyperlink_params = that->ucs4_to_utf8((const guchar *)g_value_get_pointer (value));
+                } else if (G_VALUE_HOLDS_STRING(value)) {
+                        /* Copy the string into the buffer. */
+                        hyperlink_params = g_value_dup_string(value);
+                }
+
+                value = g_value_array_get_nth(params, 1);
+
+                if (G_VALUE_HOLDS_POINTER(value)) {
+                        uri = that->ucs4_to_utf8((const guchar *)g_value_get_pointer (value));
+                } else if (G_VALUE_HOLDS_STRING(value)) {
+                        /* Copy the string into the buffer. */
+                        uri = g_value_dup_string(value);
+                }
+        }
+
+        that->set_current_hyperlink(hyperlink_params, uri);
+}
+
+void
+VteTerminalPrivate::set_current_hyperlink(char *hyperlink_params /* adopted */, char* uri /* adopted */)
+{
+        guint idx;
+        char *id = NULL;
+        char idbuf[24];
+
+        if (!m_allow_hyperlink)
+                return;
+
+        /* Get the "id" parameter */
+        if (hyperlink_params) {
+                if (strncmp(hyperlink_params, "id=", 3) == 0) {
+                        id = hyperlink_params + 3;
+                } else {
+                        id = strstr(hyperlink_params, ":id=");
+                        if (id)
+                                id += 4;
+                }
+        }
+        if (id) {
+                *strchrnul(id, ':') = '\0';
+        }
+        _vte_debug_print (VTE_DEBUG_HYPERLINK,
+                          "OSC 8: id=\"%s\" uri=\"%s\"\n",
+                          id, uri);
+
+        if (uri && strlen(uri) > VTE_HYPERLINK_URI_LENGTH_MAX) {
+                _vte_debug_print (VTE_DEBUG_HYPERLINK,
+                                  "Overlong URI ignored: \"%s\"\n",
+                                  uri);
+                uri[0] = '\0';
+        }
+
+        if (id && strlen(id) > VTE_HYPERLINK_ID_LENGTH_MAX) {
+                _vte_debug_print (VTE_DEBUG_HYPERLINK,
+                                  "Overlong \"id\" ignored: \"%s\"\n",
+                                  id);
+                id[0] = '\0';
+        }
+
+        if (uri && uri[0]) {
+                /* The hyperlink, as we carry around and store in the streams, is "id;uri" */
+                char *hyperlink;
+
+                if (!id || !id[0]) {
+                        /* Automatically generate a unique ID string. The colon makes sure
+                         * it cannot conflict with an explicitly specified one. */
+                        sprintf(idbuf, ":%ld", m_hyperlink_auto_id++);
+                        id = idbuf;
+                        _vte_debug_print (VTE_DEBUG_HYPERLINK,
+                                          "Autogenerated id=\"%s\"\n",
+                                          id);
+                }
+                hyperlink = g_strdup_printf("%s;%s", id, uri);
+                idx = _vte_ring_get_hyperlink_idx(m_screen->row_data, hyperlink);
+                g_free (hyperlink);
+        } else {
+                /* idx = 0; also remove the previous current_idx so that it can be GC'd now. */
+                idx = _vte_ring_get_hyperlink_idx(m_screen->row_data, NULL);
+        }
+
+        m_defaults.attr.hyperlink_idx = idx;
+
+        g_free(hyperlink_params);
+        g_free(uri);
 }
 
 /* Restrict the scrolling region. */
@@ -3144,7 +3259,7 @@ VteTerminalPrivate::seq_screen_alignment_test()
 		/* Fill this row. */
                 VteCell cell;
 		cell.c = 'E';
-		cell.attr = basic_cell.cell.attr;
+		cell.attr = basic_cell.attr;
 		cell.attr.columns = 1;
                 _vte_row_data_fill(rowdata, &cell, m_column_count);
                 emit_text_inserted();
@@ -3638,23 +3753,18 @@ vte_sequence_handler_graphics_attributes(VteTerminalPrivate *that, GValueArray *
 /* Lookup tables */
 
 #define VTE_SEQUENCE_HANDLER(name) name
-
-static const struct vteseq_n_struct *
-vteseq_n_lookup (register const char *str, register unsigned int len);
-#include"vteseq-n.cc"
-
+#include "vteseq-n.cc"
 #undef VTE_SEQUENCE_HANDLER
 
 static VteTerminalSequenceHandler
 _vte_sequence_get_handler (const char *name)
 {
-	int len = strlen (name);
+	size_t len = strlen(name);
 
 	if (G_UNLIKELY (len < 2)) {
 		return NULL;
 	} else {
-		const struct vteseq_n_struct *seqhandler;
-		seqhandler = vteseq_n_lookup (name, len);
+		auto seqhandler = vteseq_n_hash::lookup (name, len);
 		return seqhandler ? seqhandler->handler : NULL;
 	}
 }

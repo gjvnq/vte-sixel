@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/param.h> /* howmany() */
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
@@ -40,6 +41,7 @@
 #include "debug.h"
 #include "vteconv.h"
 #include "vtedraw.hh"
+#include "reaper.hh"
 #include "ring.h"
 #include "caps.h"
 
@@ -87,10 +89,6 @@ static inline double round(double x) {
 
 #ifndef HAVE_WINT_T
 typedef gunichar wint_t;
-#endif
-
-#ifndef howmany
-#define howmany(x, y) (((x) + ((y) - 1)) / (y))
 #endif
 
 #define WORD_CHAR_EXCEPTIONS_DEFAULT "-#%&+,./=?@\\_~\302\267"
@@ -266,9 +264,12 @@ VteTerminalPrivate::ring_remove(vte::grid::row_t position)
 
 /* Reset defaults for character insertion. */
 void
-VteTerminalPrivate::reset_default_attributes()
+VteTerminalPrivate::reset_default_attributes(bool reset_hyperlink)
 {
-        m_defaults = m_color_defaults = m_fill_defaults = basic_cell.cell;
+        hyperlink_idx_t hyperlink_idx_save = m_defaults.attr.hyperlink_idx;
+        m_defaults = m_color_defaults = m_fill_defaults = basic_cell;
+        if (!reset_hyperlink)
+                m_defaults.attr.hyperlink_idx = hyperlink_idx_save;
 }
 
 //FIXMEchpe this function is bad
@@ -921,6 +922,18 @@ VteTerminalPrivate::emit_paste_clipboard()
 	g_signal_emit(m_terminal, signals[SIGNAL_PASTE_CLIPBOARD], 0);
 }
 
+/* Emit a "hyperlink_hover_uri_changed" signal. */
+void
+VteTerminalPrivate::emit_hyperlink_hover_uri_changed(const GdkRectangle *bbox)
+{
+        GObject *object = G_OBJECT(m_terminal);
+
+        _vte_debug_print(VTE_DEBUG_SIGNALS,
+                         "Emitting `hyperlink-hover-uri-changed'.\n");
+        g_signal_emit(m_terminal, signals[SIGNAL_HYPERLINK_HOVER_URI_CHANGED], 0, m_hyperlink_hover_uri, bbox);
+        g_object_notify_by_pspec(object, pspecs[PROP_HYPERLINK_HOVER_URI]);
+}
+
 void
 VteTerminalPrivate::deselect_all()
 {
@@ -1020,10 +1033,10 @@ VteTerminalPrivate::match_contents_refresh()
 {
 	match_contents_clear();
 	GArray *array = g_array_new(FALSE, TRUE, sizeof(struct _VteCharAttributes));
-        m_match_contents = get_text_displayed(true /* wrap */,
-                                              false /* include trailing whitespace */,
-                                              array,
-                                              nullptr);
+        auto match_contents = get_text_displayed(true /* wrap */,
+                                                 false /* include trailing whitespace */,
+                                                 array);
+        m_match_contents = g_string_free(match_contents, FALSE);
 	m_match_attributes = array;
 }
 
@@ -1544,7 +1557,6 @@ VteTerminalPrivate::match_check_internal_pcre(vte::grid::column_t column,
                                      start, end,
                                      &sblank, &eblank)) {
                         _vte_debug_print(VTE_DEBUG_REGEX, "Matched dingu with tag %d\n", regex->tag);
-                        set_cursor_from_regex_match(regex);
                         *tag = regex->tag;
                         break;
                 }
@@ -1802,6 +1814,32 @@ VteTerminalPrivate::rowcol_from_event(GdkEvent *event,
         *column = rowcol.column();
         *row = rowcol.row();
         return true;
+}
+
+char *
+VteTerminalPrivate::hyperlink_check(GdkEvent *event)
+{
+        long col, row;
+        const char *hyperlink;
+        const char *separator;
+
+        if (!m_allow_hyperlink || !rowcol_from_event(event, &col, &row))
+                return NULL;
+
+        _vte_ring_get_hyperlink_at_position(m_screen->row_data, row, col, false, &hyperlink);
+
+        if (hyperlink != NULL) {
+                /* URI is after the first semicolon */
+                separator = strchr(hyperlink, ';');
+                g_assert(separator != NULL);
+                hyperlink = separator + 1;
+        }
+
+        _vte_debug_print (VTE_DEBUG_HYPERLINK,
+                          "hyperlink_check: \"%s\"\n",
+                          hyperlink);
+
+        return g_strdup(hyperlink);
 }
 
 char *
@@ -2216,7 +2254,7 @@ VteRowData *
 VteTerminalPrivate::ensure_cursor()
 {
 	VteRowData *row = ensure_row();
-        _vte_row_data_fill(row, &basic_cell.cell, m_screen->cursor.col);
+        _vte_row_data_fill(row, &basic_cell, m_screen->cursor.col);
 
 	return row;
 }
@@ -2251,27 +2289,30 @@ VteTerminalPrivate::update_insert_delta()
 	}
 }
 
-/* Show or hide the pointer. */
+/* Apply the desired mouse pointer, based on certain member variables. */
 void
-VteTerminalPrivate::set_pointer_visible(bool visible)
+VteTerminalPrivate::apply_mouse_cursor()
 {
-	m_mouse_cursor_visible = visible;
+        m_mouse_cursor_visible = m_mouse_cursor_over_widget && !(m_mouse_autohide && m_mouse_cursor_autohidden);
 
         if (!widget_realized())
                 return;
 
-	if (visible || !m_mouse_autohide) {
-		if (m_mouse_tracking_mode) {
-			_vte_debug_print(VTE_DEBUG_CURSOR,
-					"Setting mousing cursor.\n");
-			gdk_window_set_cursor(m_event_window, m_mouse_mousing_cursor);
-		} else
-		if ( (guint)m_match_tag < m_match_regexes->len) {
+        if (m_mouse_cursor_visible) {
+                if (m_hyperlink_hover_idx != 0) {
+                        _vte_debug_print(VTE_DEBUG_CURSOR,
+                                        "Setting hyperlink mouse cursor.\n");
+                        gdk_window_set_cursor(m_event_window, m_mouse_hyperlink_cursor);
+                } else if ((guint)m_match_tag < m_match_regexes->len) {
                         struct vte_match_regex *regex =
                                 &g_array_index(m_match_regexes,
 					       struct vte_match_regex,
 					       m_match_tag);
                         set_cursor_from_regex_match(regex);
+                } else if (m_mouse_tracking_mode) {
+			_vte_debug_print(VTE_DEBUG_CURSOR,
+					"Setting mousing cursor.\n");
+			gdk_window_set_cursor(m_event_window, m_mouse_mousing_cursor);
 		} else {
 			_vte_debug_print(VTE_DEBUG_CURSOR,
 					"Setting default mouse cursor.\n");
@@ -2282,6 +2323,14 @@ VteTerminalPrivate::set_pointer_visible(bool visible)
 				"Setting to invisible cursor.\n");
 		gdk_window_set_cursor(m_event_window, m_mouse_inviso_cursor);
 	}
+}
+
+/* Show or hide the pointer if autohiding is enabled. */
+void
+VteTerminalPrivate::set_pointer_autohidden(bool autohidden)
+{
+        m_mouse_cursor_autohidden = autohidden;
+        apply_mouse_cursor();
 }
 
 /*
@@ -2769,7 +2818,7 @@ VteTerminalPrivate::cleanup_fragments(long start,
 
 /* Cursor down, with scrolling. */
 void
-VteTerminalPrivate::cursor_down()
+VteTerminalPrivate::cursor_down(bool explicit_sequence)
 {
 	long start, end;
 
@@ -2818,13 +2867,14 @@ VteTerminalPrivate::cursor_down()
 			update_insert_delta();
 		}
 
-		/* Match xterm and fill the new row when scrolling. */
-#if 0           /* Disable for now: see bug 754596. */
-                if (m_fill_defaults.attr.back != VTE_DEFAULT_BG) {
+                /* Handle bce (background color erase), however, diverge from xterm:
+                 * only fill the new row with the background color if scrolling
+                 * happens due to an explicit escape sequence, not due to autowrapping.
+                 * See bug 754596 for details. */
+                if (explicit_sequence && m_fill_defaults.attr.back != VTE_DEFAULT_BG) {
 			VteRowData *rowdata = ensure_row();
                         _vte_row_data_fill (rowdata, &m_fill_defaults, m_column_count);
 		}
-#endif
 	} else {
 		/* Otherwise, just move the cursor down. */
                 m_screen->cursor.row++;
@@ -2961,7 +3011,7 @@ VteTerminalPrivate::insert_char(gunichar c,
 			/* Mark this line as soft-wrapped. */
 			row = ensure_row();
 			row->attr.soft_wrapped = 1;
-			cursor_down();
+                        cursor_down(false);
 		} else {
 			/* Don't wrap, stay at the rightmost column. */
                         col = m_screen->cursor.col =
@@ -3055,7 +3105,7 @@ VteTerminalPrivate::insert_char(gunichar c,
                         _vte_row_data_insert (row, col + i, &m_color_defaults);
 	} else {
                 cleanup_fragments(col, col + columns);
-		_vte_row_data_fill (row, &basic_cell.cell, col + columns);
+		_vte_row_data_fill (row, &basic_cell, col + columns);
 	}
 
         attr = m_defaults.attr;
@@ -3104,15 +3154,12 @@ not_inserted:
 }
 
 static void
-child_watch_cb(GPid pid,
-               int status,
-               VteTerminalPrivate *that)
+reaper_child_exited_cb(VteReaper *reaper,
+                       int ipid,
+                       int status,
+                       VteTerminalPrivate *that)
 {
-	if (that == NULL) {
-		/* The child outlived us. Do nothing, we're happy that Glib
-		 * read its exit data and hence it's no longer there as zombie. */
-		return;
-	}
+        GPid pid = GPid(ipid);
 
         auto terminal = that->m_terminal;
         /* keep the VteTerminalPrivate in a death grip */
@@ -3146,7 +3193,15 @@ VteTerminalPrivate::child_watch_done(GPid pid,
 #endif
         }
 
-        m_child_watch_source = 0;
+        /* Disconnect from the reaper */
+        if (m_reaper) {
+                g_signal_handlers_disconnect_by_func(m_reaper,
+                                                     (gpointer)reaper_child_exited_cb,
+                                                     this);
+                g_object_unref(m_reaper);
+                m_reaper = nullptr;
+        }
+
         m_pty_pid = -1;
 
         /* Close out the PTY. */
@@ -3304,14 +3359,22 @@ VteTerminalPrivate::watch_child (GPid child_pid)
         m_pty_pid = child_pid;
 
         /* Catch a child-exited signal from the child pid. */
-        if (m_child_watch_source != 0) {
-                g_source_remove (m_child_watch_source);
+        auto reaper = vte_reaper_ref();
+        vte_reaper_add_child(child_pid);
+        if (reaper != m_reaper) {
+                if (m_reaper) {
+                        g_signal_handlers_disconnect_by_func(m_reaper,
+                                                             (gpointer)reaper_child_exited_cb,
+                                                             this);
+                        g_object_unref(m_reaper);
+                }
+                m_reaper = reaper; /* adopts */
+                g_signal_connect(m_reaper, "child-exited",
+                                 G_CALLBACK(reaper_child_exited_cb),
+                                 this);
+        } else {
+                g_object_unref(reaper);
         }
-        m_child_watch_source =
-                g_child_watch_add_full(G_PRIORITY_HIGH,
-                                       child_pid,
-                                       (GChildWatchFunc)child_watch_cb,
-                                       this, nullptr);
 
         /* FIXMEchpe: call set_size() here? */
 
@@ -3369,9 +3432,6 @@ VteTerminalPrivate::spawn_sync(VtePtyFlags pty_flags,
         if (new_pty == nullptr)
                 return false;
 
-        /* FIXMEchpe: is this flag needed */
-        spawn_flags |= G_SPAWN_CHILD_INHERITS_STDIN;
-
         /* We do NOT support this flag. If you want to have some FD open in the child
          * process, simply use a child setup function that unsets the CLOEXEC flag
          * on that FD.
@@ -3385,6 +3445,7 @@ VteTerminalPrivate::spawn_sync(VtePtyFlags pty_flags,
                              (GSpawnFlags)spawn_flags,
                              child_setup, child_setup_data,
                              &pid,
+                             -1 /* no timeout */, cancellable,
                              error)) {
                 g_object_unref(new_pty);
                 return false;
@@ -3784,13 +3845,14 @@ next_match:
 		 * by this insertion. */
 		if (m_has_selection) {
                         //FIXMEchpe: this is atrocious
-			char *selection = get_selected_text();
-			if ((selection == NULL) ||
-			    (m_selection_text[VTE_SELECTION_PRIMARY] == NULL) ||
-			    (strcmp(selection, m_selection_text[VTE_SELECTION_PRIMARY]) != 0)) {
+			auto selection = get_selected_text();
+			if ((selection == nullptr) ||
+			    (m_selection[VTE_SELECTION_PRIMARY] == nullptr) ||
+			    (strcmp(selection->str, m_selection[VTE_SELECTION_PRIMARY]->str) != 0)) {
 				deselect_all();
 			}
-			g_free(selection);
+                        if (selection)
+                                g_string_free(selection, TRUE);
 		}
 	}
 
@@ -3837,6 +3899,9 @@ next_match:
 
 	/* Tell the input method where the cursor is. */
         im_update_cursor();
+
+        /* After processing some data, do a hyperlink GC. The multiplier is totally arbitrary, feel free to fine tune. */
+        _vte_ring_hyperlink_maybe_gc(m_screen->row_data, wcount * 4);
 
 	_vte_debug_print (VTE_DEBUG_WORK, ")");
 	_vte_debug_print (VTE_DEBUG_IO,
@@ -4615,7 +4680,7 @@ VteTerminalPrivate::widget_key_press(GdkEventKey *event)
 
 		/* Unless it's a modifier key, hide the pointer. */
 		if (!modifier) {
-			set_pointer_visible(false);
+                        set_pointer_autohidden(true);
 		}
 
 		_vte_debug_print(VTE_DEBUG_EVENTS,
@@ -5472,6 +5537,145 @@ VteTerminalPrivate::maybe_send_mouse_drag(vte::grid::coords const& unconfined_ro
 }
 
 /*
+ * VteTerminalPrivate::hyperlink_invalidate_and_get_bbox
+ *
+ * Invalidates cells belonging to the non-zero hyperlink idx, in order to
+ * stop highlighting the previously hovered hyperlink or start highlighting
+ * the new one. Optionally stores the coordinates of the bounding box.
+ */
+void
+VteTerminalPrivate::hyperlink_invalidate_and_get_bbox(hyperlink_idx_t idx, GdkRectangle *bbox)
+{
+        auto first_row = first_displayed_row();
+        auto end_row = last_displayed_row() + 1;
+        vte::grid::row_t row, top = LONG_MAX, bottom = -1;
+        vte::grid::column_t col, left = LONG_MAX, right = -1;
+        const VteRowData *rowdata;
+
+        g_assert (idx != 0);
+
+        for (row = first_row; row < end_row; row++) {
+                rowdata = _vte_ring_index(m_screen->row_data, row);
+                if (rowdata != NULL) {
+                        for (col = 0; col < rowdata->len; col++) {
+                                if (G_UNLIKELY (rowdata->cells[col].attr.hyperlink_idx == idx)) {
+                                        invalidate_cells(col, 1, row, 1);
+                                        top = MIN(top, row);
+                                        bottom = MAX(bottom, row);
+                                        left = MIN(left, col);
+                                        right = MAX(right, col);
+                                }
+                        }
+                }
+        }
+
+        if (bbox == NULL)
+                return;
+
+        /* If bbox != NULL, we're looking for the new hovered hyperlink which always has onscreen bits. */
+        g_assert (top != LONG_MAX && bottom != -1 && left != LONG_MAX && right != -1);
+
+        auto allocation = get_allocated_rect();
+        bbox->x = allocation.x + m_padding.left + left * m_char_width;
+        bbox->y = allocation.y + m_padding.top + row_to_pixel(top);
+        bbox->width = (right - left + 1) * m_char_width;
+        bbox->height = (bottom - top + 1) * m_char_height;
+        _vte_debug_print (VTE_DEBUG_HYPERLINK,
+                          "Hyperlink bounding box: x=%d y=%d w=%d h=%d\n",
+                          bbox->x, bbox->y, bbox->width, bbox->height);
+}
+
+/*
+ * VteTerminalPrivate::hyperlink_hilite_update:
+ *
+ * Checks the coordinates for hyperlink. Updates m_hyperlink_hover_idx
+ * and m_hyperlink_hover_uri, and schedules to update the highlighting.
+ */
+void
+VteTerminalPrivate::hyperlink_hilite_update(vte::view::coords const& pos)
+{
+        const VteRowData *rowdata;
+        hyperlink_idx_t new_hyperlink_hover_idx = 0;
+        GdkRectangle bbox;
+        const char *separator;
+
+        if (!m_allow_hyperlink)
+                return;
+
+        glong col = pos.x / m_char_width;
+        glong row = pixel_to_row(pos.y);
+
+        _vte_debug_print (VTE_DEBUG_HYPERLINK,
+                         "hyperlink_hilite_update\n");
+
+        rowdata = find_row_data(row);
+        if (rowdata && col < rowdata->len) {
+                new_hyperlink_hover_idx = rowdata->cells[col].attr.hyperlink_idx;
+        }
+        if (new_hyperlink_hover_idx == m_hyperlink_hover_idx) {
+                _vte_debug_print (VTE_DEBUG_HYPERLINK,
+                                  "hyperlink did not change\n");
+                return;
+        }
+
+        /* Invalidate cells of the old hyperlink. */
+        if (m_hyperlink_hover_idx != 0) {
+                hyperlink_invalidate_and_get_bbox(m_hyperlink_hover_idx, NULL);
+        }
+
+        /* This might be different from new_hyperlink_hover_idx. If in the stream, that one contains
+         * the pseudo idx VTE_HYPERLINK_IDX_TARGET_IN_STREAM and now a real idx is allocated.
+         * Plus, the ring's internal belief of the hovered hyperlink is also updated. */
+        m_hyperlink_hover_idx = _vte_ring_get_hyperlink_at_position(m_screen->row_data, row, col, true, &m_hyperlink_hover_uri);
+
+        /* Invalidate cells of the new hyperlink. Get the bounding box. */
+        if (m_hyperlink_hover_idx != 0) {
+                /* URI is after the first semicolon */
+                separator = strchr(m_hyperlink_hover_uri, ';');
+                g_assert(separator != NULL);
+                m_hyperlink_hover_uri = separator + 1;
+
+                hyperlink_invalidate_and_get_bbox(m_hyperlink_hover_idx, &bbox);
+                g_assert(bbox.width > 0 && bbox.height > 0);
+        }
+        _vte_debug_print(VTE_DEBUG_HYPERLINK,
+                         "Hover idx: %d \"%s\"\n",
+                         m_hyperlink_hover_idx,
+                         m_hyperlink_hover_uri);
+
+        /* Underlining hyperlinks has precedence over regex matches. So when the hovered hyperlink changes,
+         * the regex match might need to become or stop being underlined. */
+        invalidate_match_span();
+
+        apply_mouse_cursor();
+
+        emit_hyperlink_hover_uri_changed(m_hyperlink_hover_idx != 0 ? &bbox : NULL);
+}
+
+/*
+ * VteTerminalPrivate::hyperlink_hilite:
+ *
+ * If the mouse moved to a new cell, updates the hyperlinks via hyperlink_hilite_update().
+ */
+void
+VteTerminalPrivate::hyperlink_hilite(vte::view::coords const& pos)
+{
+        /* if the cursor is not above a cell, skip */
+        if (!view_coords_visible(pos))
+                return;
+
+        /* If the pointer hasn't moved to another character cell, then we
+         * need do nothing. Note: Don't use mouse_last_row as that's relative
+         * to insert_delta, and we care about the absolute row number. */
+        if (grid_coords_from_view_coords(pos) ==
+             confined_grid_coords_from_view_coords(m_mouse_last_position)) {
+                return;
+        }
+
+       hyperlink_hilite_update(pos);
+}
+
+/*
  * VteTerminalPrivate::match_hilite_clear:
  *
  * Reset match variables and invalidate the old match region if highlighted.
@@ -5600,6 +5804,8 @@ VteTerminalPrivate::match_hilite_update(vte::view::coords const& pos)
 		_vte_debug_print(VTE_DEBUG_EVENTS,
                                  "No matches %s.\n", m_match_span.to_string());
 	}
+
+        apply_mouse_cursor();
 }
 
 /*
@@ -5668,46 +5874,58 @@ clipboard_copy_cb(GtkClipboard *clipboard,
         that->widget_clipboard_requested(clipboard, data, info);
 }
 
+static char*
+text_to_utf16_mozilla(GString* text,
+                      gsize* len_ptr)
+{
+        /* Use g_convert() instead of g_utf8_to_utf16() since the former
+         * adds a BOM which Mozilla requires for text/html format.
+         */
+        return g_convert(text->str, text->len,
+                         "UTF-16", /* conver to UTF-16 */
+                         "UTF-8", /* convert from UTF-8 */
+                         nullptr /* out bytes_read */,
+                         len_ptr,
+                         nullptr);
+}
+
 void
 VteTerminalPrivate::widget_clipboard_requested(GtkClipboard *target_clipboard,
                                                GtkSelectionData *data,
                                                guint info)
 {
-	int sel;
-
-	for (sel = 0; sel < LAST_VTE_SELECTION; sel++) {
+	for (auto sel = 0; sel < LAST_VTE_SELECTION; sel++) {
 		if (target_clipboard == m_clipboard[sel] &&
-                    m_selection_text[sel] != nullptr) {
+                    m_selection[sel] != nullptr) {
 			_VTE_DEBUG_IF(VTE_DEBUG_SELECTION) {
 				int i;
-				g_printerr("Setting selection %d (%" G_GSIZE_FORMAT " UTF-8 bytes.)\n",
-					sel,
-					strlen(m_selection_text[sel]));
-				for (i = 0; m_selection_text[sel][i] != '\0'; i++) {
-					g_printerr("0x%04x\n",
-						m_selection_text[sel][i]);
+				g_printerr("Setting selection %d (%" G_GSIZE_FORMAT " UTF-8 bytes.) for target %s\n",
+                                           sel,
+                                           m_selection[sel]->len,
+                                           gdk_atom_name(gtk_selection_data_get_target(data)));
+                                char const* selection_text = m_selection[sel]->str;
+                                for (i = 0; selection_text[i] != '\0'; i++) {
+                                        g_printerr("0x%04x ", selection_text[i]);
+                                        if ((i & 0x7) == 0x7)
+                                                g_printerr("\n");
 				}
+                                g_printerr("\n");
 			}
 			if (info == VTE_TARGET_TEXT) {
-                                // FIXMEchpe cache the strlen instead of passing -1 here, and below
-				gtk_selection_data_set_text(data, m_selection_text[sel], -1);
+				gtk_selection_data_set_text(data,
+                                                            m_selection[sel]->str,
+                                                            m_selection[sel]->len);
 			} else if (info == VTE_TARGET_HTML) {
-#ifdef HTML_SELECTION
 				gsize len;
-				gchar *selection;
-
-				/* Mozilla asks that we start our text/html with the Unicode byte order mark */
-				/* (Comment found in gtkimhtml.c of pidgin fame) */
-				selection = g_convert(m_selection_html[sel],
-					-1, "UTF-16", "UTF-8", NULL, &len, NULL);
+                                auto selection = text_to_utf16_mozilla(m_selection[sel], &len);
                                 // FIXMEchpe this makes yet another copy of the data... :(
-				gtk_selection_data_set(data,
-					gdk_atom_intern("text/html", FALSE),
-					16,
-					(const guchar *)selection,
-					len);
+                                if (selection)
+                                        gtk_selection_data_set(data,
+                                                               gdk_atom_intern_static_string("text/html"),
+                                                               16,
+                                                               (const guchar *)selection,
+                                                               len);
 				g_free(selection);
-#endif
 			} else {
                                 /* Not reached */
                         }
@@ -5743,26 +5961,6 @@ VteTerminalPrivate::rgb_from_index(guint index,
 	} else {
 		g_assert_not_reached();
 	}
-}
-
-char *
-VteTerminalPrivate::get_text(vte::grid::row_t start_row,
-                             vte::grid::column_t start_col,
-                             vte::grid::row_t end_row,
-                             vte::grid::column_t end_col,
-                             bool block,
-                             bool wrap,
-                             bool include_trailing_spaces,
-                             GArray *attributes,
-                             gsize *ret_len)
-{
-        GString *text = get_text(start_row, start_col,
-                                 end_row, end_col,
-                                 block, wrap, include_trailing_spaces,
-                                 attributes);
-        if (ret_len)
-                *ret_len = text->len;
-        return static_cast<char*>(g_string_free(text, FALSE));
 }
 
 GString*
@@ -5898,22 +6096,12 @@ VteTerminalPrivate::get_text(vte::grid::row_t start_row,
 			vte_g_array_fill (attributes, &attr, string->len);
 		}
 	}
-	/* Sanity check. */
-	g_assert(attributes == NULL || string->len == attributes->len);
-        return string;
-}
 
-char *
-VteTerminalPrivate::get_text_displayed(bool wrap,
-                                       bool include_trailing_spaces,
-                                       GArray *attributes,
-                                       gsize *ret_len)
-{
-        GString *text = get_text_displayed(wrap, include_trailing_spaces,
-                                           attributes);
-        if (ret_len)
-                *ret_len = text->len;
-        return static_cast<char*>(g_string_free(text, FALSE));
+	/* Sanity check. */
+        if (attributes != nullptr)
+                g_assert_cmpuint(string->len, ==, attributes->len);
+
+        return string;
 }
 
 GString*
@@ -5941,9 +6129,8 @@ VteTerminalPrivate::get_text_displayed_a11y(bool wrap,
                         attributes);
 }
 
-char *
-VteTerminalPrivate::get_selected_text(GArray *attributes,
-                                      gsize *len_ptr)
+GString*
+VteTerminalPrivate::get_selected_text(GArray *attributes)
 {
 	return get_text(m_selection_start.row,
                         m_selection_start.col,
@@ -5952,8 +6139,7 @@ VteTerminalPrivate::get_selected_text(GArray *attributes,
                         m_selection_block_mode,
                         true /* wrap */,
                         false /* include trailing whitespace */,
-                        attributes,
-                        len_ptr);
+                        attributes);
 }
 
 /*
@@ -5967,13 +6153,15 @@ vte_terminal_cellattr_equal(VteCellAttr const *attr1,
                             VteCellAttr const* attr2)
 {
 	return (attr1->bold          == attr2->bold      &&
+	        attr1->italic        == attr2->italic    &&
 	        attr1->fore          == attr2->fore      &&
 	        attr1->back          == attr2->back      &&
 	        attr1->underline     == attr2->underline &&
 	        attr1->strikethrough == attr2->strikethrough &&
 	        attr1->reverse       == attr2->reverse   &&
 	        attr1->blink         == attr2->blink     &&
-	        attr1->invisible     == attr2->invisible);
+                attr1->invisible     == attr2->invisible &&
+                attr1->hyperlink_idx  == attr2->hyperlink_idx);
 }
 
 /*
@@ -5995,6 +6183,10 @@ VteTerminalPrivate::cellattr_to_html(VteCellAttr const* attr,
 	if (attr->bold) {
 		g_string_prepend(string, "<b>");
 		g_string_append(string, "</b>");
+	}
+	if (attr->italic) {
+		g_string_prepend(string, "<i>");
+		g_string_append(string, "</i>");
 	}
 	if (attr->fore != VTE_DEFAULT_FG || attr->reverse) {
 		vte::color::rgb color;
@@ -6064,17 +6256,18 @@ VteTerminalPrivate::char_to_cell_attr(VteCharAttributes const* attr) const
  *
  * Returns: (transfer full): a newly allocated text string, or %NULL.
  */
-char *
-VteTerminalPrivate::attributes_to_html(char const* text,
-                                       gsize len,
-                                       GArray *attrs)
+GString*
+VteTerminalPrivate::attributes_to_html(GString* text_string,
+                                       GArray* attrs)
 {
 	GString *string;
 	guint from,to;
 	const VteCellAttr *attr;
 	char *escaped, *marked;
 
-	g_assert(len == attrs->len);
+        char const* text = text_string->str;
+        auto len = text_string->len;
+        g_assert_cmpuint(len, ==, attrs->len);
 
 	/* Initial size fits perfectly if the text has no attributes and no
 	 * characters that need to be escaped
@@ -6111,29 +6304,85 @@ VteTerminalPrivate::attributes_to_html(char const* text,
 	}
 	g_string_append(string, "</pre>");
 
-	return g_string_free(string, FALSE);
+	return string;
+}
+
+static GtkTargetEntry*
+targets_for_format(VteFormat format,
+                   int *n_targets)
+{
+        switch (format) {
+        case VTE_FORMAT_TEXT: {
+                static GtkTargetEntry *text_targets = nullptr;
+                static int n_text_targets;
+
+                if (text_targets == nullptr) {
+			auto list = gtk_target_list_new (nullptr, 0);
+			gtk_target_list_add_text_targets (list, VTE_TARGET_TEXT);
+
+                        text_targets = gtk_target_table_new_from_list (list, &n_text_targets);
+			gtk_target_list_unref (list);
+                }
+
+                *n_targets = n_text_targets;
+                return text_targets;
+        }
+
+        case VTE_FORMAT_HTML: {
+                static GtkTargetEntry *html_targets = nullptr;
+                static int n_html_targets;
+
+                if (html_targets == nullptr) {
+			auto list = gtk_target_list_new (nullptr, 0);
+			gtk_target_list_add_text_targets (list, VTE_TARGET_TEXT);
+                        gtk_target_list_add (list,
+                                             gdk_atom_intern_static_string("text/html"),
+                                             0,
+                                             VTE_TARGET_HTML);
+
+                        html_targets = gtk_target_table_new_from_list (list, &n_html_targets);
+			gtk_target_list_unref (list);
+                }
+
+                *n_targets = n_html_targets;
+                return html_targets;
+        }
+        default:
+                g_assert_not_reached();
+        }
 }
 
 /* Place the selected text onto the clipboard.  Do this asynchronously so that
  * we get notified when the selection we placed on the clipboard is replaced. */
 void
-VteTerminalPrivate::widget_copy(VteSelection sel)
+VteTerminalPrivate::widget_copy(VteSelection sel,
+                                VteFormat format)
 {
-	static GtkTargetEntry *targets = NULL;
-	static gint n_targets = 0;
-	GArray *attributes;
-
-	attributes = g_array_new(FALSE, TRUE, sizeof(struct _VteCharAttributes));
+        /* Only put HTML on the CLIPBOARD, not PRIMARY */
+        g_assert(sel == VTE_SELECTION_CLIPBOARD || format == VTE_FORMAT_TEXT);
 
 	/* Chuck old selected text and retrieve the newly-selected text. */
-	g_free(m_selection_text[sel]);
-        gsize len;
-	m_selection_text[sel] = get_selected_text(attributes, &len);
-#ifdef HTML_SELECTION
-	g_free(m_selection_html[sel]);
-	m_selection_html[sel] = attributes_to_html(m_selection_text[sel], len,
-                                                   attributes);
-#endif
+        GArray *attributes = g_array_new(FALSE, TRUE, sizeof(struct _VteCharAttributes));
+        auto selection = get_selected_text(attributes);
+
+        if (m_selection[sel]) {
+                g_string_free(m_selection[sel], TRUE);
+                m_selection[sel] = nullptr;
+        }
+
+        if (selection == nullptr) {
+                g_array_free(attributes, TRUE);
+                m_has_selection = FALSE;
+                m_selection_owned[sel] = false;
+                return;
+        }
+
+        if (format == VTE_FORMAT_HTML) {
+                m_selection[sel] = attributes_to_html(selection, attributes);
+                g_string_free(selection, TRUE);
+        } else {
+                m_selection[sel] = selection;
+        }
 
 	g_array_free (attributes, TRUE);
 
@@ -6141,38 +6390,24 @@ VteTerminalPrivate::widget_copy(VteSelection sel)
 		m_has_selection = TRUE;
 
 	/* Place the text on the clipboard. */
-	if (m_selection_text[sel] != NULL) {
-		_vte_debug_print(VTE_DEBUG_SELECTION,
-				"Assuming ownership of selection.\n");
-		if (!targets) {
-			GtkTargetList *list;
+        _vte_debug_print(VTE_DEBUG_SELECTION,
+                         "Assuming ownership of selection.\n");
 
-			list = gtk_target_list_new (NULL, 0);
-			gtk_target_list_add_text_targets (list, VTE_TARGET_TEXT);
+        int n_targets;
+        auto targets = targets_for_format(format, &n_targets);
 
-#ifdef HTML_SELECTION
-			gtk_target_list_add (list,
-				gdk_atom_intern("text/html", FALSE),
-				0,
-				VTE_TARGET_HTML);
-#endif
+        m_changing_selection = true;
+        gtk_clipboard_set_with_data(m_clipboard[sel],
+                                    targets,
+                                    n_targets,
+                                    clipboard_copy_cb,
+                                    clipboard_clear_cb,
+                                    this);
+        m_changing_selection = false;
 
-                        targets = gtk_target_table_new_from_list (list, &n_targets);
-			gtk_target_list_unref (list);
-		}
-
-                m_changing_selection = true;
-		gtk_clipboard_set_with_data(m_clipboard[sel],
-                                            targets,
-                                            n_targets,
-                                            clipboard_copy_cb,
-                                            clipboard_clear_cb,
-                                            this);
-                m_changing_selection = false;
-
-		gtk_clipboard_set_can_store(m_clipboard[sel], NULL, 0);
-                m_selection_owned[sel] = true;
-	}
+        gtk_clipboard_set_can_store(m_clipboard[sel], nullptr, 0);
+        m_selection_owned[sel] = true;
+        m_selection_format[sel] = format;
 }
 
 /* Paste from the given clipboard. */
@@ -6294,7 +6529,7 @@ VteTerminalPrivate::maybe_end_selection()
 		if (m_has_selection &&
 		    !m_selecting_restart &&
 		    m_selecting_had_delta) {
-                        widget_copy(VTE_SELECTION_PRIMARY);
+                        widget_copy(VTE_SELECTION_PRIMARY, VTE_FORMAT_TEXT);
 			emit_selection_changed();
 		}
 		m_selecting = false;
@@ -6766,7 +7001,7 @@ VteTerminalPrivate::select_all()
 
 	_vte_debug_print(VTE_DEBUG_SELECTION, "Selecting *all* text.\n");
 
-        widget_copy(VTE_SELECTION_PRIMARY);
+        widget_copy(VTE_SELECTION_PRIMARY, VTE_FORMAT_TEXT);
 	emit_selection_changed();
 
 	invalidate_all();
@@ -6880,9 +7115,10 @@ VteTerminalPrivate::widget_motion_notify(GdkEventMotion *event)
 		match_hilite_hide();
 	} else if (pos != m_mouse_last_position) {
 		/* Hilite any matches. */
+                hyperlink_hilite(pos);
 		match_hilite(pos);
 		/* Show the cursor. */
-		set_pointer_visible(true);
+                set_pointer_autohidden(false);
 	}
 
 	switch (event->type) {
@@ -6940,9 +7176,10 @@ VteTerminalPrivate::widget_button_press(GdkEventButton *event)
         auto pos = view_coords_from_event(base_event);
         auto rowcol = grid_coords_from_view_coords(pos);
 
+        hyperlink_hilite(pos);
 	match_hilite(pos);
 
-	set_pointer_visible(true);
+        set_pointer_autohidden(false);
 
 	read_modifiers(base_event);
 
@@ -7090,9 +7327,10 @@ VteTerminalPrivate::widget_button_release(GdkEventButton *event)
         auto pos = view_coords_from_event(base_event);
         auto rowcol = grid_coords_from_view_coords(pos);
 
+        hyperlink_hilite(pos);
 	match_hilite(pos);
 
-	set_pointer_visible(true);
+        set_pointer_autohidden(false);
 
 	stop_autoscroll();
 
@@ -7153,7 +7391,6 @@ VteTerminalPrivate::widget_focus_in(GdkEventFocus *event)
 
 		gtk_im_context_focus_in(m_im_context);
 		invalidate_cursor_once();
-		set_pointer_visible(true);
                 maybe_feed_focus_event(true);
 	}
 }
@@ -7176,12 +7413,6 @@ VteTerminalPrivate::widget_focus_out(GdkEventFocus *event)
 		gtk_im_context_focus_out(m_im_context);
 		invalidate_cursor_once();
 
-		/* XXX Do we want to hide the match just because the terminal
-		 * lost keyboard focus, but the pointer *is* still within our
-		 * area top? */
-		match_hilite_hide();
-		/* Mark the cursor as invisible to disable hilite updating */
-		m_mouse_cursor_visible = FALSE;
                 m_mouse_pressed_buttons = 0;
                 m_mouse_handled_buttons = 0;
 	}
@@ -7200,6 +7431,9 @@ VteTerminalPrivate::widget_enter(GdkEventCrossing *event)
 
         /* Hilite any matches. */
         match_hilite_show(pos);
+
+        m_mouse_cursor_over_widget = TRUE;
+        apply_mouse_cursor();
 }
 
 void
@@ -7216,7 +7450,8 @@ VteTerminalPrivate::widget_leave(GdkEventCrossing *event)
          * whilst the cursor is absent (otherwise we copy the entire
          * buffer after each update for nothing...)
          */
-        m_mouse_cursor_visible = FALSE;
+        m_mouse_cursor_over_widget = FALSE;
+        apply_mouse_cursor();
 }
 
 static G_GNUC_UNUSED inline const char *
@@ -7786,7 +8021,7 @@ VteTerminalPrivate::VteTerminalPrivate(VteTerminal *t) :
 	m_screen = &m_normal_screen;
 	m_screen->image = NULL;
 
-	reset_default_attributes();
+        reset_default_attributes(true);
 
         /* Initialize charset modes. */
         m_character_replacements[0] = VTE_CHARACTER_REPLACEMENT_NONE;
@@ -7900,6 +8135,9 @@ VteTerminalPrivate::VteTerminalPrivate(VteTerminal *t) :
         m_fontdesc = nullptr;
         m_font_scale = 1.;
 	m_has_fonts = FALSE;
+
+        m_allow_hyperlink = FALSE;
+        m_hyperlink_auto_id = 0;
 
 	/* Not all backends generate GdkVisibilityNotify, so mark the
 	 * window as unobscured initially. */
@@ -8035,11 +8273,13 @@ VteTerminalPrivate::widget_unrealize()
 	_vte_debug_print(VTE_DEBUG_LIFECYCLE, "vte_terminal_unrealize()\n");
 
 	/* Deallocate the cursors. */
-	m_mouse_cursor_visible = FALSE;
+        m_mouse_cursor_over_widget = FALSE;
 	g_object_unref(m_mouse_default_cursor);
 	m_mouse_default_cursor = NULL;
 	g_object_unref(m_mouse_mousing_cursor);
 	m_mouse_mousing_cursor = NULL;
+        g_object_unref(m_mouse_hyperlink_cursor);
+        m_mouse_hyperlink_cursor = NULL;
 	g_object_unref(m_mouse_inviso_cursor);
 	m_mouse_inviso_cursor = NULL;
 
@@ -8223,16 +8463,16 @@ VteTerminalPrivate::~VteTerminalPrivate()
 	 * throw the text onto the clipboard without an owner so that it
 	 * doesn't just disappear. */
 	for (sel = VTE_SELECTION_PRIMARY; sel < LAST_VTE_SELECTION; sel++) {
-		if (m_selection_text[sel] != NULL) {
+		if (m_selection[sel] != nullptr) {
 			if (m_selection_owned[sel]) {
+                                // FIXMEchpe we should check m_selection_format[sel]
+                                // and also put text/html on if it's VTE_FORMAT_HTML
 				gtk_clipboard_set_text(m_clipboard[sel],
-						       m_selection_text[sel],
-						       -1);
+						       m_selection[sel]->str,
+						       m_selection[sel]->len);
 			}
-			g_free(m_selection_text[sel]);
-#ifdef HTML_SELECTION
-			g_free(m_selection_html[sel]);
-#endif
+			g_string_free(m_selection[sel], TRUE);
+                        m_selection[sel] = nullptr;
 		}
 	}
 
@@ -8252,14 +8492,12 @@ VteTerminalPrivate::~VteTerminalPrivate()
 		m_outgoing_conv = VTE_INVALID_CONV;
 	}
 
-	/* Start listening for child-exited signals and ignore them, so that no zombie child is left behind. */
-        if (m_child_watch_source != 0) {
-                g_source_remove (m_child_watch_source);
-                m_child_watch_source = 0;
-                g_child_watch_add_full(G_PRIORITY_HIGH,
-                                       m_pty_pid,
-                                       (GChildWatchFunc)child_watch_cb,
-                                       NULL, NULL);
+        /* Stop listening for child-exited signals. */
+        if (m_reaper) {
+                g_signal_handlers_disconnect_by_func(m_reaper,
+                                                     (gpointer)reaper_child_exited_cb,
+                                                     this);
+                g_object_unref(m_reaper);
         }
 
 	/* Stop processing input. */
@@ -8342,9 +8580,14 @@ VteTerminalPrivate::widget_realize()
         auto allocation = get_allocated_rect();
 
 	/* Create the stock cursors. */
-	m_mouse_cursor_visible = TRUE;
+        m_mouse_cursor_over_widget = TRUE;  /* FIXME figure out the actual value, although it's safe to err in this direction */
 	m_mouse_default_cursor = widget_cursor_new(VTE_DEFAULT_CURSOR);
 	m_mouse_mousing_cursor = widget_cursor_new(VTE_MOUSING_CURSOR);
+        if (_vte_debug_on(VTE_DEBUG_HYPERLINK))
+                /* Differ from the standard regex match cursor in debug mode. */
+                m_mouse_hyperlink_cursor = widget_cursor_new(VTE_HYPERLINK_CURSOR_DEBUG);
+        else
+                m_mouse_hyperlink_cursor = widget_cursor_new(VTE_HYPERLINK_CURSOR);
 	m_mouse_inviso_cursor = widget_cursor_new(GDK_BLANK_CURSOR);
 
 	/* Create a GDK window for the widget. */
@@ -8534,7 +8777,7 @@ VteTerminalPrivate::determine_colors(VteCell const* cell,
                                      guint *fore,
                                      guint *back) const
 {
-	determine_colors(cell ? &cell->attr : &basic_cell.cell.attr,
+	determine_colors(cell ? &cell->attr : &basic_cell.attr,
                          highlight, false /* not cursor */,
                          fore, back);
 }
@@ -8545,7 +8788,7 @@ VteTerminalPrivate::determine_cursor_colors(VteCell const* cell,
                                             guint *fore,
                                             guint *back) const
 {
-	determine_colors(cell ? &cell->attr : &basic_cell.cell.attr,
+	determine_colors(cell ? &cell->attr : &basic_cell.attr,
                          highlight, true /* cursor */,
                          fore, back);
 }
@@ -8562,6 +8805,7 @@ VteTerminalPrivate::draw_cells(struct _vte_draw_text_request *items,
                                bool italic,
                                bool underline,
                                bool strikethrough,
+                               bool hyperlink,
                                bool hilite,
                                bool boxed,
                                int column_width,
@@ -8580,9 +8824,11 @@ VteTerminalPrivate::draw_cells(struct _vte_draw_text_request *items,
 		}
 		tmp = g_string_free (str, FALSE);
 		g_printerr ("draw_cells('%s', fore=%d, back=%d, bold=%d,"
-				" ul=%d, strike=%d, hilite=%d, boxed=%d)\n",
+                                " ul=%d, strike=%d,"
+                                " hyperlink=%d, hilite=%d, boxed=%d)\n",
 				tmp, fore, back, bold,
-				underline, strikethrough, hilite, boxed);
+                                underline, strikethrough,
+                                hyperlink, hilite, boxed);
 		g_free (tmp);
 	}
 
@@ -8615,7 +8861,7 @@ VteTerminalPrivate::draw_cells(struct _vte_draw_text_request *items,
 			_vte_draw_get_style(bold, italic));
 
 	/* Draw whatever SFX are required. */
-	if (underline | strikethrough | hilite | boxed) {
+        if (underline | strikethrough | hyperlink | hilite | boxed) {
 		i = 0;
 		do {
 			x = items[i].x;
@@ -8649,7 +8895,16 @@ VteTerminalPrivate::draw_cells(struct _vte_draw_text_request *items,
                                                        y + row_height - 1,
                                                        VTE_LINE_WIDTH,
                                                        &fg, VTE_DRAW_OPAQUE);
-			}
+                        } else if (hyperlink) {
+                                for (double j = 0.125; j < columns; j += 0.5) {
+                                        _vte_draw_fill_rectangle(m_draw,
+                                                                 x + j * column_width,
+                                                                 y + row_height - 1,
+                                                                 column_width * 0.25,
+                                                                 1,
+                                                                 &fg, VTE_DRAW_OPAQUE);
+                                }
+                        }
 			if (boxed) {
                                 _vte_draw_draw_rectangle(m_draw,
 						x, y,
@@ -8880,6 +9135,7 @@ VteTerminalPrivate::draw_cells_with_attributes(struct _vte_draw_text_request *it
 					cells[j].attr.italic,
 					cells[j].attr.underline,
 					cells[j].attr.strikethrough,
+                                        m_allow_hyperlink && cells[j].attr.hyperlink_idx != 0,
 					FALSE, FALSE, column_width, height);
 		j += g_unichar_to_utf8(items[i].c, scratch_buf);
 	}
@@ -8906,7 +9162,8 @@ VteTerminalPrivate::draw_rows(VteScreen *screen_,
         vte::grid::column_t i, j;
         long x, y;
 	guint fore, nfore, back, nback;
-	gboolean underline, nunderline, bold, nbold, italic, nitalic, hilite, nhilite,
+        gboolean underline, nunderline, bold, nbold, italic, nitalic,
+                 hyperlink, nhyperlink, hilite, nhilite,
 		 selected, nselected, strikethrough, nstrikethrough;
 	guint item_count;
 	const VteCell *cell;
@@ -9041,7 +9298,8 @@ VteTerminalPrivate::draw_rows(VteScreen *screen_,
 			while (cell->c == 0 || cell->attr.invisible ||
 					(cell->c == ' ' &&
 					 !cell->attr.underline &&
-					 !cell->attr.strikethrough) ||
+                                         !cell->attr.strikethrough &&
+                                         (!m_allow_hyperlink || cell->attr.hyperlink_idx == 0)) ||
 					cell->attr.fragment) {
 				if (++i >= end_column) {
 					goto fg_skip_row;
@@ -9056,9 +9314,12 @@ VteTerminalPrivate::draw_rows(VteScreen *screen_,
 			determine_colors(cell, selected, &fore, &back);
 			underline = cell->attr.underline;
 			strikethrough = cell->attr.strikethrough;
+                        hyperlink = (m_allow_hyperlink && cell->attr.hyperlink_idx != 0);
 			bold = cell->attr.bold;
 			italic = cell->attr.italic;
-			if (m_show_match) {
+                        if (cell->attr.hyperlink_idx != 0 && cell->attr.hyperlink_idx == m_hyperlink_hover_idx) {
+                                hilite = true;
+                        } else if (m_hyperlink_hover_idx == 0 && m_show_match) {
 				hilite = m_match_span.contains(row, i);
 			} else {
 				hilite = false;
@@ -9090,7 +9351,7 @@ VteTerminalPrivate::draw_rows(VteScreen *screen_,
 						/* only break the run if we
 						 * are drawing attributes
 						 */
-						if (underline || strikethrough || hilite) {
+                                                if (underline || strikethrough || hyperlink || hilite) {
 							break;
 						} else {
 							j++;
@@ -9122,9 +9383,15 @@ VteTerminalPrivate::draw_rows(VteScreen *screen_,
 					if (nstrikethrough != strikethrough) {
 						break;
 					}
+                                        nhyperlink = (m_allow_hyperlink && cell->attr.hyperlink_idx != 0);
+                                        if (nhyperlink != hyperlink) {
+                                                break;
+                                        }
 					/* Break up matched/not-matched text. */
 					nhilite = false;
-					if (m_show_match) {
+                                        if (cell->attr.hyperlink_idx != 0 && cell->attr.hyperlink_idx == m_hyperlink_hover_idx) {
+                                                nhilite = true;
+                                        } else if (m_hyperlink_hover_idx == 0 && m_show_match) {
 						nhilite = m_match_span.contains(row, j);
 					}
 					if (nhilite != hilite) {
@@ -9173,7 +9440,7 @@ fg_draw:
 					item_count,
 					fore, back, FALSE, FALSE,
 					bold, italic, underline,
-					strikethrough, hilite, FALSE,
+                                        strikethrough, hyperlink, hilite, FALSE,
 					column_width, row_height);
 			item_count = 1;
 			/* We'll need to continue at the first cell which didn't
@@ -9378,6 +9645,7 @@ VteTerminalPrivate::paint_cursor()
                                                         cell->attr.italic,
                                                         cell->attr.underline,
                                                         cell->attr.strikethrough,
+                                                        m_allow_hyperlink && cell->attr.hyperlink_idx != 0,
                                                         FALSE,
                                                         FALSE,
                                                         width,
@@ -9463,6 +9731,7 @@ VteTerminalPrivate::paint_im_preedit_string()
 						FALSE,
 						FALSE,
 						FALSE,
+                                                FALSE,
 						FALSE,
 						TRUE,
 						width, height);
@@ -9775,6 +10044,27 @@ VteTerminalPrivate::set_allow_bold(bool setting)
 }
 
 bool
+VteTerminalPrivate::set_allow_hyperlink(bool setting)
+{
+        if (setting == m_allow_hyperlink)
+                return false;
+
+        if (setting == false) {
+                m_hyperlink_hover_idx = _vte_ring_get_hyperlink_at_position(m_screen->row_data, -1, -1, true, NULL);
+                g_assert (m_hyperlink_hover_idx == 0);
+                m_hyperlink_hover_uri = NULL;
+                emit_hyperlink_hover_uri_changed(NULL);  /* FIXME only emit if really changed */
+                m_defaults.attr.hyperlink_idx = _vte_ring_get_hyperlink_idx(m_screen->row_data, NULL);
+                g_assert (m_defaults.attr.hyperlink_idx == 0);
+        }
+
+        m_allow_hyperlink = setting;
+        invalidate_all();
+
+        return true;
+}
+
+bool
 VteTerminalPrivate::set_scroll_on_output(bool scroll)
 {
         if (scroll == m_scroll_on_output)
@@ -10010,7 +10300,7 @@ VteTerminalPrivate::set_mouse_autohide(bool autohide)
                 return false;
 
 	m_mouse_autohide = autohide;
-        /* FIXME: show mouse now if autohide=false! */
+        apply_mouse_cursor();
         return true;
 }
 
@@ -10040,7 +10330,7 @@ VteTerminalPrivate::reset(bool clear_tabstops,
 	_vte_byte_array_clear(m_outgoing);
 	/* Reset charset substitution state. */
 	_vte_iso2022_state_free(m_iso2022);
-        m_iso2022 = _vte_iso2022_state_new(NULL);
+        m_iso2022 = _vte_iso2022_state_new(nullptr);
 	_vte_iso2022_state_set_codeset(m_iso2022,
 				       m_encoding);
 	/* Reset keypad/cursor key modes. */
@@ -10064,7 +10354,7 @@ VteTerminalPrivate::reset(bool clear_tabstops,
 		m_palette[i].sources[VTE_COLOR_SOURCE_ESCAPE].is_set = FALSE;
 	/* Reset the default attributes.  Reset the alternate attribute because
 	 * it's not a real attribute, but we need to treat it as one here. */
-	reset_default_attributes();
+        reset_default_attributes(true);
         /* Reset charset modes. */
         m_character_replacements[0] = VTE_CHARACTER_REPLACEMENT_NONE;
         m_character_replacements[1] = VTE_CHARACTER_REPLACEMENT_NONE;
@@ -10111,9 +10401,6 @@ VteTerminalPrivate::reset(bool clear_tabstops,
 	m_cursor_visible = TRUE;
         /* For some reason, xterm doesn't reset alternateScroll, but we do. */
         m_alternate_screen_scroll = TRUE;
-	/* Reset the encoding. */
-	set_encoding(nullptr /* UTF-8 */);
-	g_assert_cmpstr(m_encoding, ==, "UTF-8");
 	/* Reset selection. */
 	deselect_all();
 	m_has_selection = FALSE;
@@ -10121,13 +10408,9 @@ VteTerminalPrivate::reset(bool clear_tabstops,
 	m_selecting_restart = FALSE;
 	m_selecting_had_delta = FALSE;
 	for (int sel = VTE_SELECTION_PRIMARY; sel < LAST_VTE_SELECTION; sel++) {
-		if (m_selection_text[sel] != NULL) {
-			g_free(m_selection_text[sel]);
-			m_selection_text[sel] = NULL;
-#ifdef HTML_SELECTION
-			g_free(m_selection_html[sel]);
-			m_selection_html[sel] = NULL;
-#endif
+		if (m_selection[sel] != nullptr) {
+			g_string_free(m_selection[sel], TRUE);
+			m_selection[sel] = nullptr;
 		}
                 m_selection_owned[sel] = false;
 	}
@@ -10142,6 +10425,7 @@ VteTerminalPrivate::reset(bool clear_tabstops,
 
 	/* Reset mouse motion events. */
 	m_mouse_tracking_mode = MOUSE_TRACKING_NONE;
+        apply_mouse_cursor();
         m_mouse_pressed_buttons = 0;
         m_mouse_handled_buttons = 0;
 	m_mouse_last_position = vte::view::coords(-1, -1);
@@ -10260,7 +10544,7 @@ VteTerminalPrivate::select_text(vte::grid::column_t start_col,
 	m_selection_start.row = start_row;
 	m_selection_end.col = end_col;
 	m_selection_end.row = end_row;
-        widget_copy(VTE_SELECTION_PRIMARY);
+        widget_copy(VTE_SELECTION_PRIMARY, VTE_FORMAT_TEXT);
 	emit_selection_changed();
 
 	invalidate_region(MIN (start_col, end_col), MAX (start_col, end_col),
@@ -10464,9 +10748,10 @@ VteTerminalPrivate::emit_pending_signals()
                 m_text_deleted_flag = false;
 	}
 	if (m_contents_changed_pending) {
-		/* Update dingus match set. */
+                /* Update hyperlink and dingus match set. */
 		match_contents_clear();
 		if (m_mouse_cursor_visible) {
+                        hyperlink_hilite_update(m_mouse_last_position);
 			match_hilite_update(m_mouse_last_position);
 		}
 
@@ -10829,22 +11114,18 @@ VteTerminalPrivate::search_rows(pcre2_match_context_8 *match_context,
                                 vte::grid::row_t end_row,
                                 bool backward)
 {
-	char *row_text;
-        gsize row_text_length;
 	int start, end;
 	long start_col, end_col;
-	gchar *word;
 	VteCharAttributes *ca;
 	GArray *attrs;
 	gdouble value, page_size;
 
-	row_text = get_text(start_row, 0,
-                            end_row, -1,
-                            false /* block */,
-                            true /* wrap */,
-                            false /* include trailing whitespace */, /* FIXMEchpe maybe do include it since the match may depend on it? */
-                            nullptr,
-                            &row_text_length);
+	auto row_text = get_text(start_row, 0,
+                                 end_row, -1,
+                                 false /* block */,
+                                 true /* wrap */,
+                                 false /* include trailing whitespace */, /* FIXMEchpe maybe do include it since the match may depend on it? */
+                                 nullptr);
 
         int (* match_fn) (const pcre2_code_8 *,
                           PCRE2_SPTR8, PCRE2_SIZE, PCRE2_SIZE, uint32_t,
@@ -10858,7 +11139,7 @@ VteTerminalPrivate::search_rows(pcre2_match_context_8 *match_context,
                 match_fn = pcre2_match_8;
 
         r = match_fn(_vte_regex_get_pcre(m_search_regex.regex),
-                     (PCRE2_SPTR8)row_text, row_text_length , /* subject, length */
+                     (PCRE2_SPTR8)row_text->str, row_text->len , /* subject, length */
                      0, /* start offset */
                      m_search_regex.match_flags |
                      PCRE2_NO_UTF_CHECK | PCRE2_NOTEMPTY | PCRE2_PARTIAL_SOFT /* FIXME: HARD? */,
@@ -10879,10 +11160,9 @@ VteTerminalPrivate::search_rows(pcre2_match_context_8 *match_context,
 
         start = so;
         end = eo;
-        word = g_strndup(row_text, end - start);
 
 	/* Fetch text again, with attributes */
-	g_free (row_text);
+	g_string_free(row_text, TRUE);
 	if (!m_search_attrs)
 		m_search_attrs = g_array_new (FALSE, TRUE, sizeof (VteCharAttributes));
 	attrs = m_search_attrs;
@@ -10891,8 +11171,7 @@ VteTerminalPrivate::search_rows(pcre2_match_context_8 *match_context,
                             false /* block */,
                             true /* wrap */,
                             false /* include trailing whitespace */, /* FIXMEchpe maybe true? */
-                            attrs,
-                            nullptr);
+                            attrs);
 
 	ca = &g_array_index (attrs, VteCharAttributes, start);
 	start_row = ca->row;
@@ -10901,8 +11180,7 @@ VteTerminalPrivate::search_rows(pcre2_match_context_8 *match_context,
 	end_row = ca->row;
 	end_col = ca->column;
 
-	g_free (word);
-	g_free (row_text);
+	g_string_free (row_text, TRUE);
 
 	select_text(start_col, start_row, end_col, end_row);
 	/* Quite possibly the math here should not access adjustment directly... */

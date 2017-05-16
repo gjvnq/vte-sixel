@@ -1,5 +1,5 @@
 /*
- * Copyright © 2009, 2010 Christian Persch
+ * Copyright (C) 2002 Red Hat, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -16,18 +16,15 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-G_BEGIN_DECLS
+#pragma once
 
-gboolean __vte_pty_spawn (VtePty *pty,
-                          const char *working_directory,
-                          char **argv,
-                          char **envv,
-                          GSpawnFlags spawn_flags,
-                          GSpawnChildSetupFunc child_setup,
-                          gpointer child_setup_data,
-                          GPid *child_pid /* out */,
-                          int timeout,
-                          GCancellable *cancellable,
-                          GError **error);
+#include <sys/types.h>
+#include <unistd.h>
 
-G_END_DECLS
+#include <glib-object.h>
+
+typedef struct _VteReaper VteReaper;
+
+VteReaper *vte_reaper_ref(void);
+
+void vte_reaper_add_child(GPid pid);

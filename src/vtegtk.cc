@@ -49,6 +49,7 @@
 
 #include "debug.h"
 #include "marshal.h"
+#include "reaper.hh"
 #include "vtedefines.hh"
 #include "vteinternal.hh"
 #include "vteaccess.h"
@@ -139,7 +140,7 @@ vte_terminal_set_vscroll_policy(VteTerminal *terminal,
 static void
 vte_terminal_real_copy_clipboard(VteTerminal *terminal)
 {
-	IMPL(terminal)->widget_copy(VTE_SELECTION_CLIPBOARD);
+	IMPL(terminal)->widget_copy(VTE_SELECTION_CLIPBOARD, VTE_FORMAT_TEXT);
 }
 
 static void
@@ -416,6 +417,9 @@ vte_terminal_get_property (GObject *object,
                 case PROP_ALLOW_BOLD:
                         g_value_set_boolean (value, vte_terminal_get_allow_bold (terminal));
                         break;
+                case PROP_ALLOW_HYPERLINK:
+                        g_value_set_boolean (value, vte_terminal_get_allow_hyperlink (terminal));
+                        break;
                 case PROP_AUDIBLE_BELL:
                         g_value_set_boolean (value, vte_terminal_get_audible_bell (terminal));
                         break;
@@ -448,6 +452,9 @@ vte_terminal_get_property (GObject *object,
                         break;
                 case PROP_FONT_SCALE:
                         g_value_set_double (value, vte_terminal_get_font_scale (terminal));
+                        break;
+                case PROP_HYPERLINK_HOVER_URI:
+                        g_value_set_string (value, impl->m_hyperlink_hover_uri);
                         break;
                 case PROP_ICON_TITLE:
                         g_value_set_string (value, vte_terminal_get_icon_title (terminal));
@@ -511,6 +518,9 @@ vte_terminal_set_property (GObject *object,
                 case PROP_ALLOW_BOLD:
                         vte_terminal_set_allow_bold (terminal, g_value_get_boolean (value));
                         break;
+                case PROP_ALLOW_HYPERLINK:
+                        vte_terminal_set_allow_hyperlink (terminal, g_value_get_boolean (value));
+                        break;
                 case PROP_AUDIBLE_BELL:
                         vte_terminal_set_audible_bell (terminal, g_value_get_boolean (value));
                         break;
@@ -566,6 +576,7 @@ vte_terminal_set_property (GObject *object,
                         /* Not writable */
                 case PROP_CURRENT_DIRECTORY_URI:
                 case PROP_CURRENT_FILE_URI:
+                case PROP_HYPERLINK_HOVER_URI:
                 case PROP_ICON_TITLE:
                 case PROP_WINDOW_TITLE:
                         g_assert_not_reached ();
@@ -795,6 +806,33 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+
+        /**
+         * VteTerminal::hyperlink-hover-uri-changed:
+         * @vteterminal: the object which received the signal
+         * @uri: the nonempty target URI under the mouse, or NULL
+         * @bbox: the bounding box of the hyperlink anchor text, or NULL
+         *
+         * Emitted when the hovered hyperlink changes.
+         *
+         * @uri and @bbox are owned by VTE, must not be modified, and might
+         * change after the signal handlers returns.
+         *
+         * The signal is not re-emitted when the bounding box changes for the
+         * same hyperlink. This might change in a future VTE version without notice.
+         *
+         * Since: 0.50
+         */
+        signals[SIGNAL_HYPERLINK_HOVER_URI_CHANGED] =
+                g_signal_new(I_("hyperlink-hover-uri-changed"),
+                             G_OBJECT_CLASS_TYPE(klass),
+                             G_SIGNAL_RUN_LAST,
+                             0,
+                             NULL,
+                             NULL,
+                             _vte_marshal_VOID__STRING_BOXED,
+                             G_TYPE_NONE,
+                             2, G_TYPE_STRING, GDK_TYPE_RECTANGLE | G_SIGNAL_TYPE_STATIC_SCOPE);
 
         /**
          * VteTerminal::encoding-changed:
@@ -1218,6 +1256,18 @@ vte_terminal_class_init(VteTerminalClass *klass)
                                       (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
 
         /**
+         * VteTerminal:allow-hyperlink:
+         *
+         * Controls whether or not hyperlinks (OSC 8 escape sequence) are recognized and displayed.
+         *
+         * Since: 0.50
+         */
+        pspecs[PROP_ALLOW_HYPERLINK] =
+                g_param_spec_boolean ("allow-hyperlink", NULL, NULL,
+                                      FALSE,
+                                      (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
+
+        /**
          * VteTerminal:audible-bell:
          *
          * Controls whether or not the terminal will beep when the child outputs the
@@ -1454,6 +1504,18 @@ vte_terminal_class_init(VteTerminalClass *klass)
                                      (GParamFlags) (G_PARAM_READABLE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
 
         /**
+         * VteTerminal:hyperlink-hover-uri:
+         *
+         * The currently hovered hyperlink URI, or %NULL if unset.
+         *
+         * Since: 0.50
+         */
+        pspecs[PROP_HYPERLINK_HOVER_URI] =
+                g_param_spec_string ("hyperlink-hover-uri", NULL, NULL,
+                                     NULL,
+                                     (GParamFlags) (G_PARAM_READABLE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
+
+        /**
          * VteTerminal:word-char-exceptions:
          *
          * The set of characters which will be considered parts of a word
@@ -1616,6 +1678,9 @@ vte_terminal_new(void)
  *
  * Places the selected text in the terminal in the #GDK_SELECTION_CLIPBOARD
  * selection.
+ *
+ * Deprecated: 0.50: Use vte_terminal_copy_clipboard_format() with %VTE_FORMAT_TEXT
+ *   instead.
  */
 void
 vte_terminal_copy_clipboard(VteTerminal *terminal)
@@ -1623,6 +1688,34 @@ vte_terminal_copy_clipboard(VteTerminal *terminal)
 	g_return_if_fail(VTE_IS_TERMINAL(terminal));
 
         IMPL(terminal)->emit_copy_clipboard();
+}
+
+
+/**
+ * vte_terminal_copy_clipboard_format:
+ * @terminal: a #VteTerminal
+ * @format: a #VteFormat
+ *
+ * Places the selected text in the terminal in the #GDK_SELECTION_CLIPBOARD
+ * selection in the form specified by @format.
+ *
+ * For all formats, the selection data (see #GtkSelectionData) will include the
+ * text targets (see gtk_target_list_add_text_targets() and
+ * gtk_selection_data_targets_includes_text()). For %VTE_FORMAT_HTML,
+ * the selection will also include the "text/html" target, which when requested,
+ * returns the HTML data in UTF-16 with a U+FEFF BYTE ORDER MARK character at
+ * the start.
+ *
+ * Since: 0.50
+ */
+void
+vte_terminal_copy_clipboard_format(VteTerminal *terminal,
+                                   VteFormat format)
+{
+        g_return_if_fail(VTE_IS_TERMINAL(terminal));
+        g_return_if_fail(format == VTE_FORMAT_TEXT || format == VTE_FORMAT_HTML);
+
+        IMPL(terminal)->widget_copy(VTE_SELECTION_CLIPBOARD, format);
 }
 
 /**
@@ -1637,7 +1730,7 @@ vte_terminal_copy_primary(VteTerminal *terminal)
 {
 	g_return_if_fail(VTE_IS_TERMINAL(terminal));
 	_vte_debug_print(VTE_DEBUG_SELECTION, "Copying to PRIMARY.\n");
-	IMPL(terminal)->widget_copy(VTE_SELECTION_PRIMARY);
+	IMPL(terminal)->widget_copy(VTE_SELECTION_PRIMARY, VTE_FORMAT_TEXT);
 }
 
 /**
@@ -1800,6 +1893,30 @@ vte_terminal_match_check_event(VteTerminal *terminal,
 {
         g_return_val_if_fail(VTE_IS_TERMINAL(terminal), FALSE);
         return IMPL(terminal)->regex_match_check(event, tag);
+}
+
+/**
+ * vte_terminal_hyperlink_check_event:
+ * @terminal: a #VteTerminal
+ * @event: a #GdkEvent
+ *
+ * Returns a nonempty string: the target of the explicit hyperlink (printed using the OSC 8
+ * escape sequence) at the position of the event, or %NULL.
+ *
+ * Proper use of the escape sequence should result in URI-encoded URIs with a proper scheme
+ * like "http://", "https://", "file://", "mailto:" etc. This is, however, not enforced by VTE.
+ * The caller must tolerate the returned string potentially not being a valid URI.
+ *
+ * Returns: (transfer full): a newly allocated string containing the target of the hyperlink
+ *
+ * Since: 0.50
+ */
+char *
+vte_terminal_hyperlink_check_event(VteTerminal *terminal,
+                                   GdkEvent *event)
+{
+        g_return_val_if_fail(VTE_IS_TERMINAL(terminal), FALSE);
+        return IMPL(terminal)->hyperlink_check(event);
 }
 
 /**
@@ -2252,6 +2369,8 @@ vte_terminal_watch_child (VteTerminal *terminal,
  * See vte_pty_new(), g_spawn_async() and vte_terminal_watch_child() for more information.
  *
  * Returns: %TRUE on success, or %FALSE on error with @error filled in
+ *
+ * Deprecated: 0.48: Use vte_terminal_spawn_async() instead.
  */
 gboolean
 vte_terminal_spawn_sync(VteTerminal *terminal,
@@ -2281,6 +2400,196 @@ vte_terminal_spawn_sync(VteTerminal *terminal,
                                          child_pid,
                                          cancellable,
                                          error);
+}
+
+typedef struct {
+        GWeakRef wref;
+        VteTerminalSpawnAsyncCallback callback;
+        gpointer user_data;
+} SpawnAsyncCallbackData;
+
+static gpointer
+spawn_async_callback_data_new(VteTerminal *terminal,
+                     VteTerminalSpawnAsyncCallback callback,
+                     gpointer user_data)
+{
+        SpawnAsyncCallbackData *data = g_new0 (SpawnAsyncCallbackData, 1);
+
+        g_weak_ref_init(&data->wref, terminal);
+        data->callback = callback;
+        data->user_data = user_data;
+
+        return data;
+}
+
+static void
+spawn_async_callback_data_free (SpawnAsyncCallbackData *data)
+{
+        g_weak_ref_clear(&data->wref);
+        g_free(data);
+}
+
+static void
+spawn_async_cb (GObject *source,
+                GAsyncResult *result,
+                gpointer user_data)
+{
+        SpawnAsyncCallbackData *data = reinterpret_cast<SpawnAsyncCallbackData*>(user_data);
+        VtePty *pty = VTE_PTY(source);
+
+        GPid pid = -1;
+        GError *error = nullptr;
+        vte_pty_spawn_finish(pty, result, &pid, &error);
+
+        /* Now get a ref to the terminal */
+        VteTerminal* terminal = (VteTerminal*)g_weak_ref_get(&data->wref);
+
+        /* Automatically watch the child */
+        if (terminal != nullptr) {
+                if (pid != -1)
+                        vte_terminal_watch_child(terminal, pid);
+                else
+                        vte_terminal_set_pty(terminal, nullptr);
+        } else {
+                if (pid != -1) {
+                        vte_reaper_add_child(pid);
+                }
+        }
+
+        if (data->callback)
+                data->callback(terminal, pid, error, data->user_data);
+
+        if (terminal == nullptr) {
+                /* If the terminal was destroyed, we need to abort the child process, if any */
+                if (pid != -1) {
+#ifdef HAVE_GETPGID
+                        pid_t pgrp;
+                        pgrp = getpgid(pid);
+                        if (pgrp != -1) {
+                                kill(-pgrp, SIGHUP);
+                        }
+#endif
+                        kill(pid, SIGHUP);
+                }
+        }
+
+        if (error)
+                g_error_free(error);
+
+        spawn_async_callback_data_free(data);
+
+        if (terminal != nullptr)
+                g_object_unref(terminal);
+}
+
+
+/**
+ * VteTerminalSpawnAsyncCallback:
+ * @terminal: the #VteTerminal
+ * @pid: a #GPid
+ * @error: a #GError, or %NULL
+ * @user_data: user data that was passed to vte_terminal_spawn_async
+ *
+ * Callback for vte_terminal_spawn_async().
+ *
+ * On success, @pid contains the PID of the spawned process, and @error
+ * is %NULL.
+ * On failure, @pid is -1 and @error contains the error information.
+ *
+ * Since: 0.48
+ */
+
+/**
+ * vte_terminal_spawn_async:
+ * @terminal: a #VteTerminal
+ * @pty_flags: flags from #VtePtyFlags
+ * @working_directory: (allow-none): the name of a directory the command should start
+ *   in, or %NULL to use the current working directory
+ * @argv: (array zero-terminated=1) (element-type filename): child's argument vector
+ * @envv: (allow-none) (array zero-terminated=1) (element-type filename): a list of environment
+ *   variables to be added to the environment before starting the process, or %NULL
+ * @spawn_flags_: flags from #GSpawnFlags
+ * @child_setup: (allow-none) (scope async): an extra child setup function to run in the child just before exec(), or %NULL
+ * @child_setup_data: (closure child_setup): user data for @child_setup, or %NULL
+ * @child_setup_data_destroy: (destroy child_setup_data): a #GDestroyNotify for @child_setup_data, or %NULL
+ * @timeout: a timeout value in ms, or -1 to wait indefinitely
+ * @cancellable: (allow-none): a #GCancellable, or %NULL
+ * @callback: a #VteTerminalSpawnAsyncCallback, or %NULL
+ * @user_data: user data for @callback, or %NULL
+ *
+ * A convenience function that wraps creating the #VtePty and spawning
+ * the child process on it. See vte_pty_new_sync(), vte_pty_spawn_async(),
+ * and vte_pty_spawn_finish() for more information.
+ *
+ * When the operation is finished successfully, @callback will be called
+ * with the child #GPid, and a %NULL #GError. The child PID will already be
+ * watched via vte_terminal_watch_child().
+ *
+ * When the operation fails, @callback will be called with a -1 #GPid,
+ * and a non-%NULL #GError containing the error information.
+ *
+ * Note that if @terminal has been destroyed before the operation is called,
+ * @callback will be called with a %NULL @terminal; you must not do anything
+ * in the callback besides freeing any resources associated with @user_data,
+ * but taking care not to access the now-destroyed #VteTerminal. Note that
+ * in this case, if spawning was successful, the child process will be aborted
+ * automatically.
+ *
+ * Since: 0.48
+ */
+void
+vte_terminal_spawn_async(VteTerminal *terminal,
+                         VtePtyFlags pty_flags,
+                         const char *working_directory,
+                         char **argv,
+                         char **envv,
+                         GSpawnFlags spawn_flags_,
+                         GSpawnChildSetupFunc child_setup,
+                         gpointer child_setup_data,
+                         GDestroyNotify child_setup_data_destroy,
+                         int timeout,
+                         GCancellable *cancellable,
+                         VteTerminalSpawnAsyncCallback callback,
+                         gpointer user_data)
+{
+        g_return_if_fail(VTE_IS_TERMINAL(terminal));
+        g_return_if_fail(argv != nullptr);
+        g_return_if_fail(!child_setup_data || child_setup);
+        g_return_if_fail(!child_setup_data_destroy || child_setup_data);
+        g_return_if_fail(cancellable == nullptr || G_IS_CANCELLABLE (cancellable));
+
+        GError *error = NULL;
+        VtePty* pty = vte_terminal_pty_new_sync(terminal, pty_flags, cancellable, &error);
+        if (pty == nullptr) {
+                if (child_setup_data_destroy)
+                        child_setup_data_destroy(child_setup_data);
+
+                callback(terminal, -1, error, user_data);
+
+                g_error_free(error);
+                return;
+        }
+
+        vte_terminal_set_pty(terminal, pty);
+
+        guint spawn_flags = (guint)spawn_flags_;
+
+        /* We do NOT support this flag. If you want to have some FD open in the child
+         * process, simply use a child setup function that unsets the CLOEXEC flag
+         * on that FD.
+         */
+        spawn_flags &= ~G_SPAWN_LEAVE_DESCRIPTORS_OPEN;
+
+        vte_pty_spawn_async(pty,
+                            working_directory,
+                            argv,
+                            envv,
+                            GSpawnFlags(spawn_flags),
+                            child_setup, child_setup_data, child_setup_data_destroy,
+                            timeout, cancellable,
+                            spawn_async_cb,
+                            spawn_async_callback_data_new(terminal, callback, user_data));
+        g_object_unref(pty);
 }
 
 /**
@@ -2394,10 +2703,12 @@ vte_terminal_get_text(VteTerminal *terminal,
 {
 	g_return_val_if_fail(VTE_IS_TERMINAL(terminal), NULL);
         warn_if_callback(is_selected);
-	return IMPL(terminal)->get_text_displayed(true /* wrap */,
-                                                 false /* include trailing whitespace */,
-                                                 attributes,
-                                                 nullptr);
+        auto text = IMPL(terminal)->get_text_displayed(true /* wrap */,
+                                                       false /* include trailing whitespace */,
+                                                       attributes);
+        if (text == nullptr)
+                return nullptr;
+        return (char*)g_string_free(text, FALSE);
 }
 
 /**
@@ -2425,10 +2736,12 @@ vte_terminal_get_text_include_trailing_spaces(VteTerminal *terminal,
 {
 	g_return_val_if_fail(VTE_IS_TERMINAL(terminal), NULL);
         warn_if_callback(is_selected);
-	return IMPL(terminal)->get_text_displayed(true /* wrap */,
-                                                 true /* include trailing whitespace */,
-                                                 attributes,
-                                                 nullptr);
+        auto text = IMPL(terminal)->get_text_displayed(true /* wrap */,
+                                                       true /* include trailing whitespace */,
+                                                       attributes);
+        if (text == nullptr)
+                return nullptr;
+        return (char*)g_string_free(text, FALSE);
 }
 
 /**
@@ -2464,13 +2777,15 @@ vte_terminal_get_text_range(VteTerminal *terminal,
 {
 	g_return_val_if_fail(VTE_IS_TERMINAL(terminal), NULL);
         warn_if_callback(is_selected);
-	return IMPL(terminal)->get_text(start_row, start_col,
-                                       end_row, end_col,
-                                       false /* block */,
-                                       true /* wrap */,
-                                       true /* include trailing whitespace */,
-                                       attributes,
-                                       nullptr);
+        auto text = IMPL(terminal)->get_text(start_row, start_col,
+                                             end_row, end_col,
+                                             false /* block */,
+                                             true /* wrap */,
+                                             true /* include trailing whitespace */,
+                                             attributes);
+        if (text == nullptr)
+                return nullptr;
+        return (char*)g_string_free(text, FALSE);
 }
 
 /**
@@ -2548,6 +2863,42 @@ vte_terminal_set_allow_bold(VteTerminal *terminal,
 
         if (IMPL(terminal)->set_allow_bold(allow_bold != FALSE))
                 g_object_notify_by_pspec(G_OBJECT(terminal), pspecs[PROP_ALLOW_BOLD]);
+}
+
+/**
+ * vte_terminal_get_allow_hyperlink:
+ * @terminal: a #VteTerminal
+ *
+ * Checks whether or not hyperlinks (OSC 8 escape sequence) are allowed.
+ *
+ * Returns: %TRUE if hyperlinks are enabled, %FALSE if not
+ *
+ * Since: 0.50
+ */
+gboolean
+vte_terminal_get_allow_hyperlink(VteTerminal *terminal)
+{
+        g_return_val_if_fail(VTE_IS_TERMINAL(terminal), FALSE);
+        return IMPL(terminal)->m_allow_hyperlink;
+}
+
+/**
+ * vte_terminal_set_allow_hyperlink:
+ * @terminal: a #VteTerminal
+ * @allow_hyperlink: %TRUE if the terminal should allow hyperlinks
+ *
+ * Controls whether or not hyperlinks (OSC 8 escape sequence) are allowed.
+ *
+ * Since: 0.50
+ */
+void
+vte_terminal_set_allow_hyperlink(VteTerminal *terminal,
+                                 gboolean allow_hyperlink)
+{
+        g_return_if_fail(VTE_IS_TERMINAL(terminal));
+
+        if (IMPL(terminal)->set_allow_hyperlink(allow_hyperlink != FALSE))
+                g_object_notify_by_pspec(G_OBJECT(terminal), pspecs[PROP_ALLOW_HYPERLINK]);
 }
 
 /**

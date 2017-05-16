@@ -22,6 +22,7 @@
 
 #include "vtedefines.hh"
 #include "vtetypes.hh"
+#include "reaper.hh"
 #include "ring.h"
 #include "vteconv.h"
 #include "buffer.h"
@@ -289,7 +290,7 @@ public:
         guint m_pty_output_source;
         gboolean m_pty_input_active;
         GPid m_pty_pid;	                /* pid of child process */
-        guint m_child_watch_source;
+        VteReaper *m_reaper;
 
 	/* Input data queues. */
         const char *m_encoding;            /* the pty's encoding */
@@ -359,11 +360,9 @@ public:
 	/* Clipboard data information. */
         // FIXMEchpe check if this can make m_has_selection obsolete!
         bool m_selection_owned[LAST_VTE_SELECTION];
+        VteFormat m_selection_format[LAST_VTE_SELECTION];
         bool m_changing_selection;
-        char *m_selection_text[LAST_VTE_SELECTION];
-#ifdef HTML_SELECTION
-        char *m_selection_html[LAST_VTE_SELECTION];
-#endif
+        GString *m_selection[LAST_VTE_SELECTION];
         GtkClipboard *m_clipboard[LAST_VTE_SELECTION];
 
         ClipboardTextRequestGtk<VteTerminalPrivate> m_paste_request;
@@ -482,9 +481,12 @@ public:
         VtePaletteColor m_palette[VTE_PALETTE_SIZE];
 
 	/* Mouse cursors. */
-        gboolean m_mouse_cursor_visible;
+        gboolean m_mouse_cursor_over_widget;
+        gboolean m_mouse_cursor_autohidden;  /* whether the autohiding logic wants to hide it; even if autohiding is disabled */
+        gboolean m_mouse_cursor_visible;     /* derived value really containing if it's actually visible */
         GdkCursor* m_mouse_default_cursor;
         GdkCursor* m_mouse_mousing_cursor;
+        GdkCursor* m_mouse_hyperlink_cursor;
 	GdkCursor* m_mouse_inviso_cursor;
 
 	/* Input method support. */
@@ -536,6 +538,12 @@ public:
         guint m_hscroll_policy : 1; /* unused */
         guint m_vscroll_policy : 1;
 
+        /* Hyperlinks */
+        gboolean m_allow_hyperlink;
+        hyperlink_idx_t m_hyperlink_hover_idx;
+        const char *m_hyperlink_hover_uri; /* data is owned by the ring */
+        long m_hyperlink_auto_id;
+
 public:
 
         // FIXMEchpe inline!
@@ -566,7 +574,7 @@ public:
         void cleanup_fragments(long start,
                                long end);
 
-        void cursor_down();
+        void cursor_down(bool explicit_sequence);
         void drop_scrollback();
 
         void restore_cursor(VteScreen *screen__);
@@ -646,7 +654,8 @@ public:
 
 
         void widget_paste(GdkAtom board);
-        void widget_copy(VteSelection sel);
+        void widget_copy(VteSelection sel,
+                         VteFormat format);
         void widget_paste_received(char const* text);
         void widget_clipboard_cleared(GtkClipboard *clipboard);
         void widget_clipboard_requested(GtkClipboard *target_clipboard,
@@ -698,6 +707,7 @@ public:
                         bool italic,
                         bool underline,
                         bool strikethrough,
+                        bool hyperlink,
                         bool hilite,
                         bool boxed,
                         int column_width,
@@ -782,6 +792,21 @@ public:
                         GPid *child_pid /* out */,
                         GCancellable *cancellable,
                         GError **error);
+#if 0
+        void spawn_async(VtePtyFlags pty_flags,
+                         const char *working_directory,
+                         char **argv,
+                         char **envv,
+                         GSpawnFlags spawn_flags_,
+                         GSpawnChildSetupFunc child_setup,
+                         gpointer child_setup_data,
+                         GDestroyNotify child_setup_data_destroy,
+                         GCancellable *cancellable,
+                         GAsyncReadyCallback callback,
+                         gpointer user_data);
+        bool spawn_finish(GAsyncResult *result,
+                          GPid *child_pid /* out */);
+#endif
 
         void reset(bool clear_tabstops,
                    bool clear_history,
@@ -809,33 +834,17 @@ public:
                           bool block,
                           bool wrap,
                           bool include_trailing_spaces,
-                          GArray *attributes);
-
-        char* get_text(vte::grid::row_t start_row,
-                       vte::grid::column_t start_col,
-                       vte::grid::row_t end_row,
-                       vte::grid::column_t end_col,
-                       bool block,
-                       bool wrap,
-                       bool include_trailing_spaces,
-                       GArray *attributes,
-                       gsize *ret_len);
+                          GArray* attributes = nullptr);
 
         GString* get_text_displayed(bool wrap,
                                     bool include_trailing_spaces,
-                                    GArray *attributes);
-
-        char* get_text_displayed(bool wrap,
-                                 bool include_trailing_spaces,
-                                 GArray *attributes,
-                                 gsize *ret_len);
+                                    GArray* attributes = nullptr);
 
         GString* get_text_displayed_a11y(bool wrap,
                                          bool include_trailing_spaces,
-                                         GArray *attributes);
+                                         GArray* attributes = nullptr);
 
-        char *get_selected_text(GArray *attributes = nullptr,
-                                gsize *len_ptr = nullptr);
+        GString* get_selected_text(GArray* attributes = nullptr);
 
         inline void rgb_from_index(guint index,
                                    vte::color::rgb& color) const;
@@ -857,9 +866,8 @@ public:
                                char const* text) const;
         VteCellAttr const* char_to_cell_attr(VteCharAttributes const* attr) const;
 
-        char *attributes_to_html(char const* text,
-                                 gsize len,
-                                 GArray *attrs);
+        GString* attributes_to_html(GString* text_string,
+                                    GArray* attrs);
 
         void start_selection(long x,
                              long y,
@@ -878,7 +886,7 @@ public:
         bool cell_is_selected(vte::grid::column_t col,
                               vte::grid::row_t) const;
 
-        void reset_default_attributes();
+        void reset_default_attributes(bool reset_hyperlink);
 
         void ensure_font();
         void update_font();
@@ -898,7 +906,8 @@ public:
         void read_modifiers(GdkEvent *event);
         guint translate_ctrlkey(GdkEventKey *event);
 
-        void set_pointer_visible(bool visible);
+        void apply_mouse_cursor();
+        void set_pointer_autohidden(bool autohidden);
 
         void beep();
 
@@ -945,11 +954,16 @@ public:
                                 guint rows);
         void emit_copy_clipboard();
         void emit_paste_clipboard();
+        void emit_hyperlink_hover_uri_changed(const GdkRectangle *bbox);
 
         void clear_tabstop(int column); // FIXMEchpe vte::grid::column_t ?
         bool get_tabstop(int column);
         void set_tabstop(int column);
         void set_default_tabstops();
+
+        void hyperlink_invalidate_and_get_bbox(hyperlink_idx_t idx, GdkRectangle *bbox);
+        void hyperlink_hilite_update(vte::view::coords const& pos);
+        void hyperlink_hilite(vte::view::coords const& pos);
 
         void match_contents_clear();
         void match_contents_refresh();
@@ -964,6 +978,8 @@ public:
         bool rowcol_from_event(GdkEvent *event,
                                long *column,
                                long *row);
+
+        char *hyperlink_check(GdkEvent *event);
 
         bool regex_match_check_extra(GdkEvent *event,
                                      VteRegex **regexes,
@@ -1066,6 +1082,7 @@ public:
 
         bool set_audible_bell(bool setting);
         bool set_allow_bold(bool setting);
+        bool set_allow_hyperlink(bool setting);
         bool set_backspace_binding(VteEraseBinding binding);
         bool set_background_alpha(double alpha);
         bool set_cjk_ambiguous_width(int width);
@@ -1166,6 +1183,7 @@ public:
         inline void seq_send_secondary_device_attributes();
         inline void set_current_directory_uri_changed(char* uri /* adopted */);
         inline void set_current_file_uri_changed(char* uri /* adopted */);
+        inline void set_current_hyperlink(char* hyperlink_params /* adopted */, char* uri /* adopted */);
         inline void set_keypad_mode(VteKeymode mode);
         inline void seq_erase_in_display(long param);
         inline void seq_erase_in_line(long param);

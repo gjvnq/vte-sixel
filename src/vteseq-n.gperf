@@ -1,13 +1,14 @@
 /* run "make gperf" after modifying this file */
 
 %struct-type
-%language=ANSI-C
+%language=C++
 %includes
 %enum
 %readonly-tables
+%define class-name vteseq_n_hash
 %define slot-name seq
-%define hash-function-name vteseq_n_hash
-%define lookup-function-name vteseq_n_lookup
+%define hash-function-name hash
+%define lookup-function-name lookup
 
 %compare-lengths
 %pic
@@ -168,6 +169,7 @@ struct vteseq_n_struct {
 #"reset-mouse-cursor-foreground-color", VTE_SEQUENCE_HANDLER_NULL
 "set-current-directory-uri", VTE_SEQUENCE_HANDLER(vte_sequence_handler_set_current_directory_uri)
 "set-current-file-uri", VTE_SEQUENCE_HANDLER(vte_sequence_handler_set_current_file_uri)
+"set-current-hyperlink", VTE_SEQUENCE_HANDLER(vte_sequence_handler_set_current_hyperlink)
 "urxvt-777", VTE_SEQUENCE_HANDLER(vte_sequence_handler_urxvt_777)
 "iterm2-1337", VTE_SEQUENCE_HANDLER(vte_sequence_handler_iterm2_1337)
 "graphics-attributes", VTE_SEQUENCE_HANDLER(vte_sequence_handler_graphics_attributes)

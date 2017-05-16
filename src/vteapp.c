@@ -143,8 +143,8 @@ button_pressed(GtkWidget *widget, GdkEventButton *event, gpointer data)
 {
 	VteTerminal *terminal;
 	char *match;
+        char *hyperlink;
 	int tag;
-	GtkBorder padding;
         gboolean has_extra_match;
         char *extra_match = NULL;
 
@@ -152,9 +152,14 @@ button_pressed(GtkWidget *widget, GdkEventButton *event, gpointer data)
 	case 3:
 		terminal = VTE_TERMINAL(widget);
 
-                gtk_style_context_get_padding(gtk_widget_get_style_context(widget),
-                                              gtk_widget_get_state_flags(widget),
-                                              &padding);
+                hyperlink = vte_terminal_hyperlink_check_event(terminal,
+                                                               (GdkEvent*)event);
+                if (hyperlink)
+                        g_print("Hyperlink: %s\n", hyperlink);
+                else
+                        g_print("Not hyperlink\n");
+                g_free(hyperlink);
+
 		match = vte_terminal_match_check_event(terminal,
                                                        (GdkEvent*)event,
                                                        &tag);
@@ -589,6 +594,20 @@ add_dingus (VteTerminal *terminal,
         }
 }
 
+static void
+spawn_cb (VteTerminal *terminal,
+          GPid pid,
+          GError *error,
+          gpointer user_data)
+{
+        if (pid == -1) {
+                g_printerr("Spawning failed: %s\n", error->message);
+                return;
+        }
+
+        g_printerr("Spawning succeded, PID %ld\n", (long)pid);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -611,7 +630,8 @@ main(int argc, char **argv)
                 icon_title = FALSE, shell = TRUE,
 		 reverse = FALSE, use_geometry_hints = TRUE,
                 use_scrolled_window = FALSE,
-                show_object_notifications = FALSE, rewrap = TRUE;
+                show_object_notifications = FALSE, rewrap = TRUE,
+                hyperlink = TRUE;
 	char *geometry = NULL;
 	gint lines = -1;
 	const char *message = "Launching interactive shell...\r\n";
@@ -651,6 +671,11 @@ main(int argc, char **argv)
 			G_OPTION_ARG_NONE, &use_gregex,
 			"Use GRegex instead of PCRE2", NULL
 		},
+                {
+                        "no-hyperlink", 'H', G_OPTION_FLAG_REVERSE,
+                        G_OPTION_ARG_NONE, &hyperlink,
+                        "Disable hyperlinks inside the terminal", NULL
+                },
 		{
 			"no-rewrap", 'R', G_OPTION_FLAG_REVERSE,
 			G_OPTION_ARG_NONE, &rewrap,
@@ -1050,6 +1075,8 @@ main(int argc, char **argv)
                 pango_font_description_free(desc);
         }
 
+        vte_terminal_set_allow_hyperlink(terminal, hyperlink);
+
 	/* Match "abcdefg". */
 	if (!no_builtin_dingus) {
                 add_dingus (terminal, (char **) builtin_dingus);
@@ -1109,7 +1136,6 @@ main(int argc, char **argv)
 			GError *err = NULL;
 			char **command_argv = NULL;
 			int command_argc;
-			GPid pid = -1;
                         char *free_me = NULL;
 
 			_VTE_DEBUG_IF(VTE_DEBUG_MISC)
@@ -1124,23 +1150,21 @@ main(int argc, char **argv)
 			if (command == NULL || *command == '\0')
 				command = "/bin/sh";
 
-			if (!g_shell_parse_argv(command, &command_argc, &command_argv, &err) ||
-			    !vte_terminal_spawn_sync(terminal,
-							    pty_flags,
-							    NULL,
-							    command_argv,
-							    env_add,
-							    G_SPAWN_SEARCH_PATH,
-							    NULL, NULL,
-							    &pid,
-                                                            NULL /* cancellable */,
-							    &err)) {
-				g_warning("Failed to fork: %s\n", err->message);
+			if (!g_shell_parse_argv(command, &command_argc, &command_argv, &err)) {
+				g_warning("Failed to parse argv: %s\n", err->message);
 				g_error_free(err);
-			} else {
-				g_print("Fork succeeded, PID %d\n", pid);
-			}
+                        }
 
+                        vte_terminal_spawn_async(terminal,
+                                                 pty_flags,
+                                                 working_directory,
+                                                 command_argv,
+                                                 env_add,
+                                                 G_SPAWN_SEARCH_PATH_FROM_ENVP,
+                                                 NULL, NULL, NULL,
+                                                 30 * 1000 /* 30s */,
+                                                 NULL /* cancellable */,
+                                                 spawn_cb, NULL);
                         g_free (free_me);
 			g_strfreev(command_argv);
 		} else {
