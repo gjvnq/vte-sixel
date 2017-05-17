@@ -2519,6 +2519,7 @@ VteTerminalPrivate::set_current_hyperlink(char *hyperlink_params /* adopted */, 
         guint idx;
         char *id = NULL;
         char idbuf[24];
+        char *p;
 
         if (!m_allow_hyperlink)
                 return;
@@ -2534,7 +2535,9 @@ VteTerminalPrivate::set_current_hyperlink(char *hyperlink_params /* adopted */, 
                 }
         }
         if (id) {
-                *strchrnul(id, ':') = '\0';
+                p = strchr(id, ':');
+                if (p)
+                        *p = '\0';
         }
         _vte_debug_print (VTE_DEBUG_HYPERLINK,
                           "OSC 8: id=\"%s\" uri=\"%s\"\n",
@@ -3231,9 +3234,9 @@ VteTerminalPrivate::seq_load_sixel(char const* dcs)
 			if (m_sixel_scrolls_right)
 				seq_cursor_forward(width);
 			else
-				cursor_down();
+				seq_cursor_down(1);
 		} else {
-			cursor_down();
+			seq_cursor_down(1);
 		}
 	}
 	if (m_sixel_display_mode)
