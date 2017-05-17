@@ -71,6 +71,7 @@ _vte_ring_init (VteRing *ring, gulong max_rows, gboolean has_streams)
 		ring->attr_stream = _vte_file_stream_new ();
 		ring->text_stream = _vte_file_stream_new ();
 		ring->row_stream = _vte_file_stream_new ();
+		ring->image_stream = _vte_file_stream_new ();
 	} else {
 		ring->attr_stream = ring->text_stream = ring->row_stream = NULL;
 	}
@@ -92,6 +93,8 @@ _vte_ring_init (VteRing *ring, gulong max_rows, gboolean has_streams)
         ring->hyperlink_hover_idx = 0;
         ring->hyperlink_maybe_gc_counter = 0;
 
+	ring->image_list = NULL;
+
 	_vte_ring_validate(ring);
 }
 
@@ -99,16 +102,24 @@ void
 _vte_ring_fini (VteRing *ring)
 {
 	gulong i;
+	GList *l;
 
 	for (i = 0; i <= ring->mask; i++)
 		_vte_row_data_fini (&ring->array[i]);
 
 	g_free (ring->array);
 
+	/* Clear SIXEL images */
+	for (l = ring->image_list; l; l = g_list_next (l)) {
+		_vte_image_fini ((VteImage *)l->data);
+		ring->image_list = g_list_delete_link (ring->image_list, l);
+	}
+
 	if (ring->has_streams) {
 		g_object_unref (ring->attr_stream);
 		g_object_unref (ring->text_stream);
 		g_object_unref (ring->row_stream);
+		g_object_unref (ring->image_stream);
 	}
 
 	g_string_free (ring->utf8_buffer, TRUE);
@@ -606,8 +617,9 @@ _vte_ring_reset_streams (VteRing *ring, gulong position)
 
 	if (ring->has_streams) {
 		_vte_stream_reset (ring->row_stream, position * sizeof (VteRowRecord));
-                _vte_stream_reset (ring->text_stream, _vte_stream_head (ring->text_stream));
-                _vte_stream_reset (ring->attr_stream, _vte_stream_head (ring->attr_stream));
+		_vte_stream_reset (ring->text_stream, _vte_stream_head (ring->text_stream));
+		_vte_stream_reset (ring->attr_stream, _vte_stream_head (ring->attr_stream));
+		_vte_stream_reset (ring->image_stream, _vte_stream_head (ring->image_stream));
 	}
 
 	ring->last_attr_text_start_offset = 0;
@@ -617,11 +629,19 @@ _vte_ring_reset_streams (VteRing *ring, gulong position)
 long
 _vte_ring_reset (VteRing *ring)
 {
+	GList *l;
+
         _vte_debug_print (VTE_DEBUG_RING, "Reseting the ring at %lu.\n", ring->end);
 
         _vte_ring_reset_streams (ring, ring->end);
         ring->start = ring->writable = ring->end;
         ring->cached_row_num = (gulong) -1;
+
+	/* Clear SIXEL images */
+	for (l = ring->image_list; l; l = g_list_next (l)) {
+		_vte_image_fini ((VteImage *)l->data);
+		ring->image_list = g_list_delete_link (ring->image_list, l);
+	}
 
         return ring->end;
 }
@@ -1396,6 +1416,59 @@ err:
 	g_free(new_markers);
 }
 
+
+/**
+ * _vte_ring_append_image:
+ * @ring: a #VteRing
+ * @left: left position of image in cell unit
+ * @top: left position of image in cell unit
+ * @width: width of image in cell unit
+ * @height: width of image in cell unit
+ *
+ * Append an image into the internal image list.
+ */
+void _vte_ring_append_image (VteRing *ring, cairo_surface_t *surface, glong left, glong top, glong width, glong height)
+{
+	VteImage *image;
+	GList *l;
+        gulong char_width, char_height;
+
+	_vte_image_init (&image, surface, left, top, width, height, ring->image_stream);
+
+	char_width = cairo_image_surface_get_width(surface) / width;
+	char_height = cairo_image_surface_get_height(surface) / height;
+
+	/* composition */
+	for (l = ring->image_list; l; (l = g_list_next(l))) {
+		if (_vte_image_includes (image, (VteImage *)l->data)) {
+			_vte_image_fini ((VteImage *)l->data);
+			ring->image_list = g_list_delete_link (ring->image_list, l);
+		} else if (image && _vte_image_includes ((VteImage *)l->data, image)) {
+			_vte_image_combine ((VteImage *)l->data, image, char_width, char_height);
+			_vte_image_fini (image);
+			image = NULL;
+		}
+	}
+
+	if (image)
+		ring->image_list = g_list_append (ring->image_list, image);
+}
+
+void
+_vte_ring_shrink_image_stream (VteRing *ring)
+{
+	VteImage *first_image;
+	GList *l = ring->image_list;
+
+	if (! l)
+		return;
+
+	first_image = (VteImage *)l->data;
+
+	if (_vte_image_is_freezed (first_image))
+		if (first_image->position < _vte_stream_tail (ring->image_stream))
+			_vte_stream_advance_tail (ring->image_stream, first_image->position);
+}
 
 static gboolean
 _vte_ring_write_row (VteRing *ring,

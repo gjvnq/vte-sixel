@@ -8016,10 +8016,8 @@ VteTerminalPrivate::VteTerminalPrivate(VteTerminal *t) :
 	/* Initialize the screens and histories. */
 	_vte_ring_init (m_alternate_screen.row_data, m_row_count, FALSE);
 	m_screen = &m_alternate_screen;
-	m_screen->image = NULL;
 	_vte_ring_init (m_normal_screen.row_data, VTE_SCROLLBACK_INIT, TRUE);
 	m_screen = &m_normal_screen;
-	m_screen->image = NULL;
 
         reset_default_attributes(true);
 
@@ -8479,12 +8477,6 @@ VteTerminalPrivate::~VteTerminalPrivate()
 	/* Clear the output histories. */
 	_vte_ring_fini(m_normal_screen.row_data);
 	_vte_ring_fini(m_alternate_screen.row_data);
-
-	/* Clear SIXEL images */
-	if (m_normal_screen.image)
-		m_normal_screen.image->destroy_recursively();
-	if (m_alternate_screen.image)
-		m_alternate_screen.image->destroy_recursively();
 
 	/* Free conversion descriptors. */
 	if (m_outgoing_conv != VTE_INVALID_CONV) {
@@ -9747,6 +9739,9 @@ VteTerminalPrivate::widget_draw(cairo_t *cr)
         cairo_region_t *region;
         int allocated_width, allocated_height;
         int extra_area_for_cursor;
+        VteRing *ring = m_screen->row_data;
+	GList *l;
+	int image_shrink_flag = 0;
 
         if (!gdk_cairo_get_clip_rectangle (cr, &clip_rect))
                 return;
@@ -9772,42 +9767,30 @@ VteTerminalPrivate::widget_draw(cairo_t *cr)
                          get_color(VTE_DEFAULT_BG), m_background_alpha);
 
 	/* Draw SIXEL images */
-	if (m_screen->image) {
-		VteImage *img = m_screen->image;
-		VteImage *prev = NULL;
-		while (img && img->storage_is_full()) {
-			VteImage *tmp = img->next;
-			delete img;
-			img = tmp;
+	for (l = ring->image_list; l; (l = g_list_next(l))) {
+                VteImage *img = (VteImage *)l->data;
+		if (img->top + img->height < m_screen->scroll_delta - m_scrollback_lines) {
+			/* Collect unused images */
+			_vte_image_fini (img);
+			m_screen->row_data->image_list = g_list_delete_link (m_screen->row_data->image_list, l);
+			image_shrink_flag = 1;
 		}
-		while (img) {
-			if (img->top + img->height < m_screen->scroll_delta - m_scrollback_lines) {
-				/* Collect unused images */
-				if (prev)
-					prev->next = img->next;
-				else
-					m_screen->image = img->next;
-				VteImage *tmp = img->next;
-				delete img;
-				img = tmp;
-			}
-			else if (img->top + img->height < first_displayed_row() || img->top > last_displayed_row()) {
-				/* Hibernate images that scroll out of view */
-				img->hibernate();
-				prev = img;
-				img = img->next;
-			}
-			else {
-				/* Display images */
-				int x = m_padding.left + img->left * m_char_width;
-				int y = m_padding.top + (img->top - m_screen->scroll_delta) * m_char_height;
-				img->paint(cr, x, y);
-				invalidate_cells(img->left, img->width, img->top - m_screen->scroll_delta, img->height);
-				//invalidate_all();
-				prev = img;
-				img = img->next;
-			}
+		else if (img->top + img->height < first_displayed_row() || img->top > last_displayed_row()) {
+			/* Freeze images that scroll out of view */
+			_vte_image_freeze(img);
 		}
+		else {
+			/* Display images */
+			int x = m_padding.left + img->left * m_char_width;
+			int y = m_padding.top + (img->top - m_screen->scroll_delta) * m_char_height;
+			_vte_image_paint(img, cr, x, y);
+			//invalidate_cells(img->left, img->width, img->top - m_screen->scroll_delta, img->height);
+			//invalidate_all();
+		}
+	}
+
+	if (image_shrink_flag) {
+		_vte_ring_shrink_image_stream (ring);
 	}
 
         /* Clip vertically, for the sake of smooth scrolling. We want the top and bottom paddings to be unused.
@@ -10376,13 +10359,6 @@ VteTerminalPrivate::reset(bool clear_tabstops,
                 m_screen->scroll_delta = -1;
                 queue_adjustment_value_changed(m_screen->insert_delta);
 		adjust_adjustments_full();
-		/* clear SIXEL images */
-		if (m_normal_screen.image)
-			m_normal_screen.image->destroy_recursively();
-		m_normal_screen.image = NULL;
-		if (m_alternate_screen.image)
-			m_alternate_screen.image->destroy_recursively();
-		m_alternate_screen.image = NULL;
 	}
         /* DECSCUSR cursor style */
         m_cursor_style = VTE_CURSOR_STYLE_TERMINAL_DEFAULT;

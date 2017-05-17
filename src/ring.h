@@ -28,6 +28,7 @@
 
 #include "vterowdata.h"
 #include "vtestream.h"
+#include "vteimage.h"
 
 G_BEGIN_DECLS
 
@@ -71,8 +72,10 @@ struct _VteRing {
          *    As far as the ring is concerned, this hyperlink data is opaque. Only the caller cares that
          *    if nonempty, it actually contains the ID and URI separated with a semicolon. Not NUL terminated.
          *  - 2 bytes repeating attr.hyperlink_length so that we can walk backwards.
+         *
+         * image_stream contains images in PNG format.
          */
-	VteStream *attr_stream, *text_stream, *row_stream;
+	VteStream *attr_stream, *text_stream, *row_stream, *image_stream;
 	gsize last_attr_text_start_offset;
 	VteCellAttr last_attr;
 	GString *utf8_buffer;
@@ -92,6 +95,8 @@ struct _VteRing {
         hyperlink_idx_t hyperlink_hover_idx;  /* The hyperlink idx of the hovered cell.
                                                  An idx is allocated on hover even if the cell is scrolled out to the streams. */
         gulong hyperlink_maybe_gc_counter;  /* Do a GC when it reaches 65536. */
+
+        GList *image_list;  /* The SIXEL image list */
 };
 
 #define _vte_ring_contains(__ring, __position) \
@@ -118,6 +123,8 @@ void _vte_ring_remove (VteRing *ring, gulong position);
 void _vte_ring_drop_scrollback (VteRing *ring, gulong position);
 void _vte_ring_set_visible_rows (VteRing *ring, gulong rows);
 void _vte_ring_rewrap (VteRing *ring, glong columns, VteVisualPosition **markers);
+void _vte_ring_append_image (VteRing *ring, cairo_surface_t *surface, glong left, glong top, glong width, glong height);
+void _vte_ring_shrink_image_stream (VteRing *ring);
 gboolean _vte_ring_write_contents (VteRing *ring,
 				   GOutputStream *stream,
 				   VteWriteFlags flags,
