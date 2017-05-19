@@ -29,7 +29,6 @@
 
 #include "vtepcre2.h"
 #include "vteregexinternal.hh"
-#include "vteimage.hh"
 #include "sixel.h"
 
 typedef enum {
@@ -122,7 +121,6 @@ struct _VteScreen {
         VteVisualPosition cursor;  /* absolute value, from the beginning of the terminal history */
         double scroll_delta;	/* scroll offset */
         long insert_delta;	/* insertion offset */
-        VteImage *image;	/* SIXEL image list */
 
         /* Stuff saved along with the cursor */
         struct {

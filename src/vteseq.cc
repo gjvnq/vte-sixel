@@ -32,7 +32,6 @@
 #include <vte/vte.h>
 #include "vteinternal.hh"
 #include "vtegtk.hh"
-#include "vteimage.hh"
 #include "caps.h"
 #include "debug.h"
 #include "sixel.h"
@@ -2519,6 +2518,7 @@ VteTerminalPrivate::set_current_hyperlink(char *hyperlink_params /* adopted */, 
         guint idx;
         char *id = NULL;
         char idbuf[24];
+        char *p;
 
         if (!m_allow_hyperlink)
                 return;
@@ -2534,7 +2534,9 @@ VteTerminalPrivate::set_current_hyperlink(char *hyperlink_params /* adopted */, 
                 }
         }
         if (id) {
-                *strchrnul(id, ':') = '\0';
+                p = strchr(id, ':');
+                if (p)
+                        *p = '\0';
         }
         _vte_debug_print (VTE_DEBUG_HYPERLINK,
                           "OSC 8: id=\"%s\" uri=\"%s\"\n",
@@ -3147,13 +3149,10 @@ VteTerminalPrivate::seq_load_sixel(char const* dcs)
 	auto bg = get_color(VTE_DEFAULT_BG);
 	int nfg = fg->red >> 8 | fg->green >> 8 << 8 | fg->blue >> 8 << 16;
 	int nbg = bg->red >> 8 | bg->green >> 8 << 8 | bg->blue >> 8 << 16;
-	VteImage *image = NULL;
 	glong left, top, width, height;
 	glong pixelwidth, pixelheight, stride;
 	glong i;
-	VteScreen *screen;
 	cairo_surface_t *surface;
-	VteImage *prev, *cur;
 
 	/* Parse images */
 	if (sixel_parser_init(&m_sixel_state, nfg, nbg, m_sixel_use_private_register) < 0) {
@@ -3175,9 +3174,11 @@ VteTerminalPrivate::seq_load_sixel(char const* dcs)
 	}
 	sixel_parser_deinit(&m_sixel_state);
 
-	/* Create a VteImage */
+	/* Create cairo surface */
 	if (m_sixel_display_mode)
 		seq_home_cursor();
+	left = m_screen->cursor.col;
+	top = m_screen->cursor.row;
 	width = (m_sixel_state.image.width + m_char_width - 1) / m_char_width;
 	height = (m_sixel_state.image.height + m_char_height - 1) / m_char_height;
 	pixelwidth = m_sixel_state.image.width;
@@ -3186,43 +3187,8 @@ VteTerminalPrivate::seq_load_sixel(char const* dcs)
 	surface = cairo_image_surface_create_for_data(pixels, CAIRO_FORMAT_ARGB32, pixelwidth, pixelheight, stride);
 	if (! surface)
 		return;
-	left = m_screen->cursor.col;
-	top = m_screen->cursor.row;
-	image = new VteImage(surface, left, top, width, height);
-	if (! image)
-		return;
-	screen = m_screen;
-
-	/* composition */
-	prev = NULL;
-	cur = screen->image;
-	while (cur) {
-		if (image->includes(cur)) {
-			if (prev) {
-				prev->next = cur->next;
-				delete cur;
-				cur = prev->next;
-			} else {
-				prev = cur;
-				cur = cur->next;
-				delete prev;
-				prev = NULL;
-			}
-		} else if (image && cur->includes(image)) {
-			cur->combine(image, m_char_width, m_char_height);
-			delete image;
-			image = NULL;
-			prev = cur;
-			cur = cur->next;
-		} else {
-			prev = cur;
-			cur = cur->next;
-		}
-	}
-	if (prev)
-		prev->next = image;
-	else
-		screen->image = image;
+	/* Append new image to VteRing */
+	_vte_ring_append_image(m_screen->row_data, surface, left, top, width, height);
 
 	/* Erase characters on the image */
 	for (i = 0; i < height; ++i) {
@@ -3231,9 +3197,9 @@ VteTerminalPrivate::seq_load_sixel(char const* dcs)
 			if (m_sixel_scrolls_right)
 				seq_cursor_forward(width);
 			else
-				cursor_down();
+				cursor_down(true);
 		} else {
-			cursor_down();
+			cursor_down(true);
 		}
 	}
 	if (m_sixel_display_mode)
