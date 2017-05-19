@@ -29,9 +29,12 @@ typedef struct _VteImage {
 	size_t nread;             /* private use: for read callback */
 	size_t nwrite;            /* private use: for write callback */
 	cairo_surface_t *surface; /* internal cairo image */
+	unsigned char *pixels;    /* XXX: we make it hold raw pixel bytes, because a cairo
+                                          surface created by cairo_image_surface_create_for_data()
+                                          didn't seems to take ownership of pixel bytes... */
 } VteImage;
 
-void _vte_image_init (VteImage **image, cairo_surface_t *s, gint col, gint row, gint w, gint h, _VteStream *stream);
+void _vte_image_init (VteImage **image, guchar *pixels, gint pixelwidth, gint pixelheight, gint col, gint row, gint w, gint h, _VteStream *stream);
 void _vte_image_fini (VteImage *image);
 bool _vte_image_is_freezed (VteImage *image);
 void _vte_image_freeze (VteImage *image);

@@ -25,25 +25,24 @@ static cairo_status_t write_callback (void *closure, const char *data, unsigned 
 
 /* VteImage implementation */
 void
-_vte_image_init (VteImage **image, cairo_surface_t *s, gint col, gint row, gint w, int h, VteStream *stream)
+_vte_image_init (VteImage **image, guchar *pixels, gint pixelwidth, gint pixelheight, gint col, gint row, gint w, gint h, _VteStream *stream)
 {
 	*image = (VteImage *)g_malloc0 (sizeof (VteImage));
 	(*image)->left = col;
 	(*image)->top = row;
 	(*image)->width = w;
 	(*image)->height = h;
-	(*image)->surface = s;
+	(*image)->surface = cairo_image_surface_create_for_data(pixels, CAIRO_FORMAT_ARGB32, pixelwidth, pixelheight, pixelwidth * 4);
 	(*image)->stream = stream;
+	(*image)->pixels = pixels;
 }
 
 void
 _vte_image_fini (VteImage *image)
 {
-	if (! image->surface)
-		if (! _vte_image_ensure_thawn (image))
-			return;
-
-	cairo_surface_destroy (image->surface);
+	if (image->surface)
+		cairo_surface_destroy (image->surface);
+	free (image->pixels);
 	free (image);
 }
 
@@ -83,6 +82,8 @@ _vte_image_freeze (VteImage *image)
 	status = cairo_surface_write_to_png_stream (image->surface, (cairo_write_func_t)write_callback, image);
 	if (status == CAIRO_STATUS_SUCCESS) {
 		cairo_surface_destroy (image->surface);
+		free (image->pixels);
+		image->pixels = NULL;
 		image->surface = NULL;
 	}
 }

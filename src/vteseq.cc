@@ -3150,9 +3150,8 @@ VteTerminalPrivate::seq_load_sixel(char const* dcs)
 	int nfg = fg->red >> 8 | fg->green >> 8 << 8 | fg->blue >> 8 << 16;
 	int nbg = bg->red >> 8 | bg->green >> 8 << 8 | bg->blue >> 8 << 16;
 	glong left, top, width, height;
-	glong pixelwidth, pixelheight, stride;
+	glong pixelwidth, pixelheight;
 	glong i;
-	cairo_surface_t *surface;
 
 	/* Parse images */
 	if (sixel_parser_init(&m_sixel_state, nfg, nbg, m_sixel_use_private_register) < 0) {
@@ -3174,21 +3173,17 @@ VteTerminalPrivate::seq_load_sixel(char const* dcs)
 	}
 	sixel_parser_deinit(&m_sixel_state);
 
-	/* Create cairo surface */
 	if (m_sixel_display_mode)
 		seq_home_cursor();
+
+	/* Append new image to VteRing */
 	left = m_screen->cursor.col;
 	top = m_screen->cursor.row;
 	width = (m_sixel_state.image.width + m_char_width - 1) / m_char_width;
 	height = (m_sixel_state.image.height + m_char_height - 1) / m_char_height;
 	pixelwidth = m_sixel_state.image.width;
 	pixelheight = m_sixel_state.image.height;
-	stride = m_sixel_state.image.width * 4;
-	surface = cairo_image_surface_create_for_data(pixels, CAIRO_FORMAT_ARGB32, pixelwidth, pixelheight, stride);
-	if (! surface)
-		return;
-	/* Append new image to VteRing */
-	_vte_ring_append_image(m_screen->row_data, surface, left, top, width, height);
+	_vte_ring_append_image (m_screen->row_data, pixels, pixelwidth, pixelheight, left, top, width, height);
 
 	/* Erase characters on the image */
 	for (i = 0; i < height; ++i) {
