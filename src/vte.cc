@@ -9741,6 +9741,7 @@ VteTerminalPrivate::widget_draw(cairo_t *cr)
         int extra_area_for_cursor;
         VteRing *ring = m_screen->row_data;
 	GList *l;
+        vte::grid::row_t top_row, bottom_row;
 	int image_shrink_flag = 0;
 
         if (!gdk_cairo_get_clip_rectangle (cr, &clip_rect))
@@ -9766,6 +9767,9 @@ VteTerminalPrivate::widget_draw(cairo_t *cr)
 			 allocated_width, allocated_height,
                          get_color(VTE_DEFAULT_BG), m_background_alpha);
 
+        top_row = first_displayed_row();
+        bottom_row = last_displayed_row();
+
 	/* Draw SIXEL images */
 	for (l = ring->image_list; l; (l = g_list_next(l))) {
                 VteImage *img = (VteImage *)l->data;
@@ -9775,7 +9779,7 @@ VteTerminalPrivate::widget_draw(cairo_t *cr)
 			m_screen->row_data->image_list = g_list_delete_link (m_screen->row_data->image_list, l);
 			image_shrink_flag = 1;
 		}
-		else if (img->top + img->height < first_displayed_row() || img->top > last_displayed_row()) {
+		else if (img->top + img->height < top_row || img->top > bottom_row) {
 			/* Freeze images that scroll out of view */
 			_vte_image_freeze(img);
 		}
