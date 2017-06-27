@@ -3152,6 +3152,8 @@ VteTerminalPrivate::seq_load_sixel(char const* dcs)
 	glong left, top, width, height;
 	glong pixelwidth, pixelheight;
 	glong i;
+	cairo_surface_t *image_surface, *surface;
+	cairo_t *cr;
 
 	/* Parse images */
 	if (sixel_parser_init(&m_sixel_state, nfg, nbg, m_sixel_use_private_register) < 0) {
@@ -3183,7 +3185,25 @@ VteTerminalPrivate::seq_load_sixel(char const* dcs)
 	height = (m_sixel_state.image.height + m_char_height - 1) / m_char_height;
 	pixelwidth = m_sixel_state.image.width;
 	pixelheight = m_sixel_state.image.height;
-	_vte_ring_append_image (m_screen->row_data, pixels, pixelwidth, pixelheight, left, top, width, height);
+
+	/* create image surface (in-memory, device-independant) */
+	image_surface = cairo_image_surface_create_for_data (pixels, CAIRO_FORMAT_ARGB32, pixelwidth, pixelheight, pixelwidth * 4);
+	g_assert (image_surface);
+
+	/* create device-dependant surface */
+	surface = gdk_window_create_similar_surface (gtk_widget_get_window (GTK_WIDGET(m_widget)), CAIRO_CONTENT_COLOR_ALPHA, pixelwidth, pixelheight);
+	g_assert (surface);
+
+	/* copy image surface to device surface */
+	cr = cairo_create (surface);
+	cairo_set_source_surface (cr, image_surface, 0, 0);
+	cairo_paint (cr);
+	cairo_destroy (cr);
+	cairo_surface_destroy (image_surface);
+	free (pixels);
+
+	/* create image surface */
+	_vte_ring_append_image (m_screen->row_data, surface, pixelwidth, pixelheight, left, top, width, height);
 
 	/* Erase characters on the image */
 	for (i = 0; i < height; ++i) {

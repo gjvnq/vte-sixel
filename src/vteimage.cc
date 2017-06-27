@@ -25,16 +25,17 @@ static cairo_status_t write_callback (void *closure, const char *data, unsigned 
 
 /* VteImage implementation */
 void
-_vte_image_init (VteImage **image, guchar *pixels, gint pixelwidth, gint pixelheight, gint col, gint row, gint w, gint h, _VteStream *stream)
+_vte_image_init (VteImage **image, cairo_surface_t *surface, gint pixelwidth, gint pixelheight, gint col, gint row, gint w, gint h, _VteStream *stream)
 {
 	*image = (VteImage *)g_malloc0 (sizeof (VteImage));
+	(*image)->pixelwidth = pixelwidth;
+	(*image)->pixelheight = pixelheight;
 	(*image)->left = col;
 	(*image)->top = row;
 	(*image)->width = w;
 	(*image)->height = h;
-	(*image)->surface = cairo_image_surface_create_for_data(pixels, CAIRO_FORMAT_ARGB32, pixelwidth, pixelheight, pixelwidth * 4);
+	(*image)->surface = surface;
 	(*image)->stream = stream;
-	(*image)->pixels = pixels;
 }
 
 void
@@ -42,7 +43,6 @@ _vte_image_fini (VteImage *image)
 {
 	if (image->surface)
 		cairo_surface_destroy (image->surface);
-	free (image->pixels);
 	free (image);
 }
 
@@ -82,8 +82,6 @@ _vte_image_freeze (VteImage *image)
 	status = cairo_surface_write_to_png_stream (image->surface, (cairo_write_func_t)write_callback, image);
 	if (status == CAIRO_STATUS_SUCCESS) {
 		cairo_surface_destroy (image->surface);
-		free (image->pixels);
-		image->pixels = NULL;
 		image->surface = NULL;
 	}
 }
@@ -112,14 +110,12 @@ _vte_image_combine (VteImage *lhs, VteImage *rhs, gulong char_width, gulong char
 
 	gulong offsetx = (rhs->left - lhs->left) * char_width;
 	gulong offsety = (rhs->top - lhs->top) * char_height;
-	gulong pixelwidth = cairo_image_surface_get_width (lhs->surface);
-	gulong pixelheight = cairo_image_surface_get_height (lhs->surface);
 
 	if ((! _vte_image_ensure_thawn (lhs)) || (! _vte_image_ensure_thawn (rhs)))
 		return;
 
 	cr = cairo_create (lhs->surface);
-	cairo_rectangle (cr, offsetx, offsety, pixelwidth, pixelheight);
+	cairo_rectangle (cr, offsetx, offsety, lhs->pixelwidth, lhs->pixelheight);
 	cairo_clip (cr);
 	cairo_set_source_surface (cr, rhs->surface, offsetx, offsety);
 	cairo_paint (cr);
@@ -130,18 +126,13 @@ _vte_image_combine (VteImage *lhs, VteImage *rhs, gulong char_width, gulong char
 void
 _vte_image_paint (VteImage *image, cairo_t *cr, gint offsetx, gint offsety)
 {
-	gulong pixelwidth;
-	gulong pixelheight;
-
 	g_assert_true (image != NULL);
 
 	if (! _vte_image_ensure_thawn (image))
 		return;
 
-	pixelwidth = cairo_image_surface_get_width (image->surface);
-	pixelheight = cairo_image_surface_get_height (image->surface);
 	cairo_save (cr);
-	cairo_rectangle (cr, offsetx, offsety, pixelwidth, pixelheight);
+	cairo_rectangle (cr, offsetx, offsety, image->pixelwidth, image->pixelheight);
 	cairo_clip (cr);
 	cairo_set_source_surface (cr, image->surface, offsetx, offsety);
 	cairo_paint (cr);

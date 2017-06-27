@@ -20,6 +20,8 @@
 #include "vtestream.h"
 
 typedef struct _VteImage {
+        gint pixelwidth;
+        gint pixelheight;
 	gint left;                /* left position in cell unit at the vte virtual screen */
 	gint top;                 /* top position in cell unit at the vte virtual screen */
 	gint width;               /* width in cell unit */
@@ -29,12 +31,9 @@ typedef struct _VteImage {
 	size_t nread;             /* private use: for read callback */
 	size_t nwrite;            /* private use: for write callback */
 	cairo_surface_t *surface; /* internal cairo image */
-	unsigned char *pixels;    /* XXX: we make it hold raw pixel bytes, because a cairo
-                                          surface created by cairo_image_surface_create_for_data()
-                                          didn't seems to take ownership of pixel bytes... */
 } VteImage;
 
-void _vte_image_init (VteImage **image, guchar *pixels, gint pixelwidth, gint pixelheight, gint col, gint row, gint w, gint h, _VteStream *stream);
+void _vte_image_init (VteImage **image, cairo_surface_t *surface, gint pixelwidth, gint pixelheight, gint col, gint row, gint w, gint h, _VteStream *stream);
 void _vte_image_fini (VteImage *image);
 bool _vte_image_is_freezed (VteImage *image);
 void _vte_image_freeze (VteImage *image);

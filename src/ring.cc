@@ -1428,16 +1428,16 @@ err:
  * Append an image into the internal image list.
  */
 void
-_vte_ring_append_image (VteRing *ring, guchar *pixels, gint pixelwidth, gint pixelheight, glong left, glong top, glong width, glong height)
+_vte_ring_append_image (VteRing *ring, cairo_surface_t *surface, gint pixelwidth, gint pixelheight, glong left, glong top, glong width, glong height)
 {
 	VteImage *image;
 	GList *l;
-        gulong char_width, char_height;
+	gulong char_width, char_height;
 
-	_vte_image_init (&image, pixels, pixelwidth, pixelheight, left, top, width, height, ring->image_stream);
+	_vte_image_init (&image, surface, pixelwidth, pixelheight, left, top, width, height, ring->image_stream);
 
 	char_width = pixelwidth / width;
-	char_height = pixelheight / height;
+	char_height = pixelwidth / height;
 
 	/* composition */
 	for (l = ring->image_list; l; (l = g_list_next(l))) {

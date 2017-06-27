@@ -123,7 +123,7 @@ void _vte_ring_remove (VteRing *ring, gulong position);
 void _vte_ring_drop_scrollback (VteRing *ring, gulong position);
 void _vte_ring_set_visible_rows (VteRing *ring, gulong rows);
 void _vte_ring_rewrap (VteRing *ring, glong columns, VteVisualPosition **markers);
-void _vte_ring_append_image (VteRing *ring, guchar *pixels, gint pixelwidth, gint pixelheight, glong left, glong top, glong width, glong height);
+void _vte_ring_append_image (VteRing *ring, cairo_surface_t *surface, gint pixelwidth, gint pixelheight, glong left, glong top, glong width, glong height);
 void _vte_ring_shrink_image_stream (VteRing *ring);
 gboolean _vte_ring_write_contents (VteRing *ring,
 				   GOutputStream *stream,
