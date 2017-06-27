@@ -63,8 +63,6 @@ libvte_@VTE_API_MAJOR_VERSION@_@VTE_API_MINOR_VERSION@_la_SOURCES = \
 	ring.h \
 	sixel.cc \
 	sixel.h \
-	sixel_hls.cc \
-	sixel_hls.h \
 	table.cc \
 	table.h \
 	vte.cc \
