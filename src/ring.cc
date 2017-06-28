@@ -24,6 +24,7 @@
 #include "ring.h"
 
 #include <string.h>
+#include <new>
 
 /*
  * VteRing: A buffer ring
@@ -111,7 +112,7 @@ _vte_ring_fini (VteRing *ring)
 
 	/* Clear SIXEL images */
 	for (l = ring->image_list; l; l = g_list_next (l)) {
-		_vte_image_fini ((VteImage *)l->data);
+		delete (vte::image::image_object *)l->data;
 		ring->image_list = g_list_delete_link (ring->image_list, l);
 	}
 
@@ -639,7 +640,7 @@ _vte_ring_reset (VteRing *ring)
 
 	/* Clear SIXEL images */
 	for (l = ring->image_list; l; l = g_list_next (l)) {
-		_vte_image_fini ((VteImage *)l->data);
+		delete (vte::image::image_object *)l->data;
 		ring->image_list = g_list_delete_link (ring->image_list, l);
 	}
 
@@ -1430,23 +1431,25 @@ err:
 void
 _vte_ring_append_image (VteRing *ring, cairo_surface_t *surface, gint pixelwidth, gint pixelheight, glong left, glong top, glong width, glong height)
 {
-	VteImage *image;
+	using namespace vte::image;
+	image_object *image;
 	GList *l;
 	gulong char_width, char_height;
 
-	_vte_image_init (&image, surface, pixelwidth, pixelheight, left, top, width, height, ring->image_stream);
+	image = new (std::nothrow) image_object (surface, pixelwidth, pixelheight, left, top, width, height, ring->image_stream);
+	g_assert_true (image != NULL);
 
 	char_width = pixelwidth / width;
 	char_height = pixelwidth / height;
 
 	/* composition */
 	for (l = ring->image_list; l; (l = g_list_next(l))) {
-		if (_vte_image_includes (image, (VteImage *)l->data)) {
-			_vte_image_fini ((VteImage *)l->data);
+		if (image->includes ((image_object *)l->data)) {
+			delete (image_object *)l->data;
 			ring->image_list = g_list_delete_link (ring->image_list, l);
-		} else if (image && _vte_image_includes ((VteImage *)l->data, image)) {
-			_vte_image_combine ((VteImage *)l->data, image, char_width, char_height);
-			_vte_image_fini (image);
+		} else if (image && ((image_object *)l->data)->includes (image)) {
+			((image_object *)l->data)->combine (image, char_width, char_height);
+			delete image;
 			image = NULL;
 		}
 	}
@@ -1458,17 +1461,18 @@ _vte_ring_append_image (VteRing *ring, cairo_surface_t *surface, gint pixelwidth
 void
 _vte_ring_shrink_image_stream (VteRing *ring)
 {
-	VteImage *first_image;
+	using namespace vte::image;
+	image_object *first_image;
 	GList *l = ring->image_list;
 
 	if (! l)
 		return;
 
-	first_image = (VteImage *)l->data;
+	first_image = (image_object *)l->data;
 
-	if (_vte_image_is_freezed (first_image))
-		if (first_image->position > _vte_stream_tail (ring->image_stream))
-			_vte_stream_advance_tail (ring->image_stream, first_image->position);
+	if (first_image->is_freezed ())
+		if (first_image->get_stream_position () > _vte_stream_tail (ring->image_stream))
+			_vte_stream_advance_tail (ring->image_stream, first_image->get_stream_position ());
 }
 
 static gboolean

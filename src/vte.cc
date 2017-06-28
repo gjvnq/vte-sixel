@@ -9767,29 +9767,27 @@ VteTerminalPrivate::widget_draw(cairo_t *cr)
 			 allocated_width, allocated_height,
                          get_color(VTE_DEFAULT_BG), m_background_alpha);
 
-        top_row = first_displayed_row();
-        bottom_row = last_displayed_row();
+	top_row = first_displayed_row();
+	bottom_row = last_displayed_row();
 
 	/* Draw SIXEL images */
 	for (l = ring->image_list; l; (l = g_list_next(l))) {
-                VteImage *img = (VteImage *)l->data;
-		if (img->top + img->height < m_screen->scroll_delta - m_scrollback_lines) {
+		auto image = (vte::image::image_object *)l->data;
+		if (image->top + image->height < m_screen->scroll_delta - m_scrollback_lines) {
 			/* Collect unused images */
-			_vte_image_fini (img);
+			delete (image);
 			m_screen->row_data->image_list = g_list_delete_link (m_screen->row_data->image_list, l);
 			image_shrink_flag = 1;
 		}
-		else if (img->top + img->height < top_row || img->top > bottom_row) {
+		else if (image->top + image->height < top_row || image->top > bottom_row) {
 			/* Freeze images that scroll out of view */
-			_vte_image_freeze(img);
+			image->freeze ();
 		}
 		else {
 			/* Display images */
-			int x = m_padding.left + img->left * m_char_width;
-			int y = m_padding.top + (img->top - m_screen->scroll_delta) * m_char_height;
-			_vte_image_paint(img, cr, x, y);
-			//invalidate_cells(img->left, img->width, img->top - m_screen->scroll_delta, img->height);
-			//invalidate_all();
+			int x = m_padding.left + image->left * m_char_width;
+			int y = m_padding.top + (image->top - m_screen->scroll_delta) * m_char_height;
+			image->paint(cr, x, y);
 		}
 	}
 

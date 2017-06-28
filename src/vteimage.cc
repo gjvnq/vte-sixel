@@ -20,46 +20,55 @@
 #include "vteimage.h"
 #include "vteinternal.hh"
 
-static cairo_status_t read_callback (void *closure, char *data, unsigned int length);
-static cairo_status_t write_callback (void *closure, const char *data, unsigned int length);
+namespace vte::image {
 
-/* VteImage implementation */
-void
-_vte_image_init (VteImage **image, cairo_surface_t *surface, gint pixelwidth, gint pixelheight, gint col, gint row, gint w, gint h, _VteStream *stream)
+//static image_object::cairo_status_t read_callback (void *closure, char *data, unsigned int length);
+//static image_object::cairo_status_t write_callback (void *closure, const char *data, unsigned int length);
+
+/* image_object implementation */
+image_object::image_object (cairo_surface_t *surface, gint pixelwidth, gint pixelheight, gint col, gint row, gint w, gint h, _VteStream *stream)
 {
-	*image = (VteImage *)g_malloc0 (sizeof (VteImage));
-	(*image)->pixelwidth = pixelwidth;
-	(*image)->pixelheight = pixelheight;
-	(*image)->left = col;
-	(*image)->top = row;
-	(*image)->width = w;
-	(*image)->height = h;
-	(*image)->surface = surface;
-	(*image)->stream = stream;
+	this->pixelwidth = pixelwidth;
+	this->pixelheight = pixelheight;
+	this->left = col;
+	this->top = row;
+	this->width = w;
+	this->height = h;
+	this->surface = surface;
+	this->stream = stream;
 }
 
-void
-_vte_image_fini (VteImage *image)
+image_object::~image_object ()
 {
-	if (image->surface)
-		cairo_surface_destroy (image->surface);
-	free (image);
+	if (this->surface)
+		cairo_surface_destroy (this->surface);
+}
+
+gulong
+image_object::get_stream_position () const
+{
+	return this->position;
+}
+
+/* Indicate whether the image is serialized to the stream */
+bool
+image_object::is_freezed () const
+{
+	return (this->surface == NULL);
 }
 
 /* Deserialize the cairo image from the temporary file */
 bool
-_vte_image_ensure_thawn (VteImage *image)
+image_object::ensure_thawn ()
 {
-	g_assert_true (image != NULL);
-
-	if (image->surface)
+	if (this->surface)
 		return true;
-	if (image->position < _vte_stream_tail (image->stream))
+	if (this->position < _vte_stream_tail (this->stream))
 		return false;
 
-	image->nread = 0;
-	image->surface = cairo_image_surface_create_from_png_stream ((cairo_read_func_t)read_callback, image);
-	if (! image->surface)
+	this->nread = 0;
+	this->surface = cairo_image_surface_create_from_png_stream ((cairo_read_func_t)read_callback, this);
+	if (! this->surface)
 		return false;
 
 	return true;
@@ -67,55 +76,51 @@ _vte_image_ensure_thawn (VteImage *image)
 
 /* Serialize the image for saving RAM */
 void
-_vte_image_freeze (VteImage *image)
+image_object::freeze ()
 {
 	cairo_status_t status;
 
-	g_assert_true (image != NULL);
-
-	if (! image->surface)
+	if (! this->surface)
 		return;
 
-	image->position = _vte_stream_head (image->stream);
-	image->nwrite = 0;
+	this->position = _vte_stream_head (this->stream);
+	this->nwrite = 0;
 
-	status = cairo_surface_write_to_png_stream (image->surface, (cairo_write_func_t)write_callback, image);
+	status = cairo_surface_write_to_png_stream (this->surface, (cairo_write_func_t)write_callback, this);
 	if (status == CAIRO_STATUS_SUCCESS) {
-		cairo_surface_destroy (image->surface);
-		image->surface = NULL;
+		cairo_surface_destroy (this->surface);
+		this->surface = NULL;
 	}
 }
 
 /* Test whether image image includes that image */
 bool
-_vte_image_includes (const VteImage *lhs, const VteImage *rhs)
+image_object::includes (const image_object *rhs) const
 {
-	g_assert_true (lhs != NULL);
 	g_assert_true (rhs != NULL);
 
-	return rhs->left >= lhs->left &&
-	       rhs->top >= lhs->top &&
-	       rhs->left + rhs->width <= lhs->left + lhs->width &&
-	       rhs->top + rhs->height <= lhs->top + lhs->height;
+	return rhs->left >= this->left &&
+	       rhs->top >= this->top &&
+	       rhs->left + rhs->width <= this->left + this->width &&
+	       rhs->top + rhs->height <= this->top + this->height;
 }
 
 /* Merge right-hand-side image into left-hand-side image */
 void
-_vte_image_combine (VteImage *lhs, VteImage *rhs, gulong char_width, gulong char_height)
+image_object::combine (image_object *rhs, gulong char_width, gulong char_height)
 {
 	cairo_t *cr;
 
-	g_assert_true (lhs != NULL);
 	g_assert_true (rhs != NULL);
 
-	gulong offsetx = (rhs->left - lhs->left) * char_width;
-	gulong offsety = (rhs->top - lhs->top) * char_height;
+	gulong offsetx = (rhs->left - this->left) * char_width;
+	gulong offsety = (rhs->top - this->top) * char_height;
 
-	if ((! _vte_image_ensure_thawn (lhs)) || (! _vte_image_ensure_thawn (rhs)))
+	if ((! this->ensure_thawn ()) || (! rhs->ensure_thawn ()))
 		return;
 
-	cr = cairo_create (lhs->surface);
-	cairo_rectangle (cr, offsetx, offsety, lhs->pixelwidth, lhs->pixelheight);
+	cr = cairo_create (this->surface);
+	cairo_rectangle (cr, offsetx, offsety, this->pixelwidth, this->pixelheight);
 	cairo_clip (cr);
 	cairo_set_source_surface (cr, rhs->surface, offsetx, offsety);
 	cairo_paint (cr);
@@ -124,55 +129,45 @@ _vte_image_combine (VteImage *lhs, VteImage *rhs, gulong char_width, gulong char
 
 /* Paint the image into given cairo rendering context */
 void
-_vte_image_paint (VteImage *image, cairo_t *cr, gint offsetx, gint offsety)
+image_object::paint (cairo_t *cr, gint offsetx, gint offsety)
 {
-	g_assert_true (image != NULL);
-
-	if (! _vte_image_ensure_thawn (image))
+	if (! this->ensure_thawn ())
 		return;
 
 	cairo_save (cr);
-	cairo_rectangle (cr, offsetx, offsety, image->pixelwidth, image->pixelheight);
+	cairo_rectangle (cr, offsetx, offsety, this->pixelwidth, this->pixelheight);
 	cairo_clip (cr);
-	cairo_set_source_surface (cr, image->surface, offsetx, offsety);
+	cairo_set_source_surface (cr, this->surface, offsetx, offsety);
 	cairo_paint (cr);
 	cairo_restore (cr);
 }
 
-/* Indicate whether the image is serialized to the stream */
-bool
-_vte_image_is_freezed (VteImage *image)
-{
-	g_assert_true (image != NULL);
-
-	return (image->surface == NULL);
-}
-
 /* callback routines for stream I/O */
 
-static cairo_status_t
-read_callback (void *closure, char *data, unsigned int length)
+cairo_status_t
+image_object::read_callback (void *closure, char *data, unsigned int length)
 {
-	VteImage *image = (VteImage *)closure;
+	image_object *image = (image_object *)closure;
 
 	g_assert_true (image != NULL);
 
-	_vte_stream_read (image->stream, image->position + image->nread, (char *)data, length);
+	_vte_stream_read (image->stream, image->position + image->nread, data, length);
 	image->nread += length;
 
 	return CAIRO_STATUS_SUCCESS;
 }
 
-static cairo_status_t
-write_callback (void *closure, const char *data, unsigned int length)
+cairo_status_t
+image_object::write_callback (void *closure, const char *data, unsigned int length)
 {
-	VteImage *image = (VteImage *)closure;
+	image_object *image = (image_object *)closure;
 
 	g_assert_true (image != NULL);
 
-	_vte_stream_append (image->stream, (const char *)data, length);
+	_vte_stream_append (image->stream, data, length);
 	image->nwrite += length;
 
 	return CAIRO_STATUS_SUCCESS;
 }
 
+} // namespace vte::image

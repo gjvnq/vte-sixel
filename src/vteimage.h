@@ -19,26 +19,41 @@
 #include <pango/pangocairo.h>
 #include "vtestream.h"
 
-typedef struct _VteImage {
-        gint pixelwidth;
-        gint pixelheight;
+namespace vte {
+
+namespace image {
+
+struct image_object {
+public:
 	gint left;                /* left position in cell unit at the vte virtual screen */
 	gint top;                 /* top position in cell unit at the vte virtual screen */
 	gint width;               /* width in cell unit */
 	gint height;              /* height in cell unit */
+private:
 	VteStream *stream;        /* NULL if it's serialized */
+	gint pixelwidth;          /* image width in pixels */
+	gint pixelheight;         /* image hieght in pixels */
 	gulong position;          /* indicates the position at the stream if it's serialized */
 	size_t nread;             /* private use: for read callback */
 	size_t nwrite;            /* private use: for write callback */
 	cairo_surface_t *surface; /* internal cairo image */
-} VteImage;
+public:
+	explicit image_object (cairo_surface_t *surface, gint pixelwidth, gint pixelheight, gint col, gint row, gint w, gint h, _VteStream *stream);
+	~image_object ();
+        gulong get_stream_position () const;
+	bool is_freezed () const;
+	bool includes (const image_object *rhs) const;
+	void freeze ();
+	void combine (image_object *rhs, gulong char_width, gulong char_height);
+	void paint (cairo_t *cr, gint offsetx, gint offsety);
 
-void _vte_image_init (VteImage **image, cairo_surface_t *surface, gint pixelwidth, gint pixelheight, gint col, gint row, gint w, gint h, _VteStream *stream);
-void _vte_image_fini (VteImage *image);
-bool _vte_image_is_freezed (VteImage *image);
-void _vte_image_freeze (VteImage *image);
-bool _vte_image_ensure_thawn (VteImage *image);
-bool _vte_image_includes (const VteImage *lhs, const VteImage *rhs);
-void _vte_image_combine (VteImage *lhs, VteImage *rhs, gulong char_width, gulong char_height);
-void _vte_image_paint (VteImage *image, cairo_t *cr, gint offsetx, gint offsety);
+private:
+	bool ensure_thawn ();
+public:
+	static cairo_status_t read_callback (void *closure, char *data, unsigned int length);
+	static cairo_status_t write_callback (void *closure, const char *data, unsigned int length);
+};
 
+} // namespace image
+
+} // namespace vte

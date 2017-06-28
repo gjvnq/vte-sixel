@@ -3190,8 +3190,8 @@ VteTerminalPrivate::seq_load_sixel(char const* dcs)
 	image_surface = cairo_image_surface_create_for_data (pixels, CAIRO_FORMAT_ARGB32, pixelwidth, pixelheight, pixelwidth * 4);
 	g_assert (image_surface);
 
-	/* create device-dependant surface */
-	surface = gdk_window_create_similar_surface (gtk_widget_get_window (GTK_WIDGET(m_widget)), CAIRO_CONTENT_COLOR_ALPHA, pixelwidth, pixelheight);
+	/* create device-dependant surface compatible with m_widget */
+	surface = gdk_window_create_similar_surface (gtk_widget_get_window (m_widget), CAIRO_CONTENT_COLOR_ALPHA, pixelwidth, pixelheight);
 	g_assert (surface);
 
 	/* copy image surface to device surface */
