@@ -1202,7 +1202,9 @@ public:
                                                       int index_fallback,
                                                       int osc,
                                                       char const *terminator);
-        inline void seq_load_sixel(char const* p);
+        void seq_load_sixel(char const* p);
+        void maybe_freeze_hidden_images();
+        void maybe_remove_images ();
         void subscribe_accessible_events();
         void select_text(vte::grid::column_t start_col,
                          vte::grid::row_t start_row,

@@ -3195,7 +3195,7 @@ VteTerminalPrivate::seq_load_sixel(char const* dcs)
 	surface = gdk_window_create_similar_surface (gtk_widget_get_window (m_widget), CAIRO_CONTENT_COLOR_ALPHA, pixelwidth, pixelheight);
 	g_assert (surface);
 
-	/* copy image surface to device surface */
+	/* copy image surface to a device-compatible surface */
 	cr = cairo_create (surface);
 	cairo_set_source_surface (cr, image_surface, 0, 0);
 	cairo_paint (cr);
@@ -3203,7 +3203,7 @@ VteTerminalPrivate::seq_load_sixel(char const* dcs)
 	cairo_surface_destroy (image_surface);
 	free (pixels);
 
-	/* create image surface */
+	/* create image object */
 	_vte_ring_append_image (m_screen->row_data, surface, pixelwidth, pixelheight, left, top, width, height);
 
 	/* Erase characters on the image */

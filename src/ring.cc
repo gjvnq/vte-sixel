@@ -94,7 +94,9 @@ _vte_ring_init (VteRing *ring, gulong max_rows, gboolean has_streams)
         ring->hyperlink_hover_idx = 0;
         ring->hyperlink_maybe_gc_counter = 0;
 
-	ring->image_list = NULL;
+        ring->image_map = new (std::nothrow) std::map<gint, vte::image::image_object *>();
+        ring->image_onscreen_resource_counter = 0;
+        ring->image_offscreen_resource_counter = 0;
 
 	_vte_ring_validate(ring);
 }
@@ -103,7 +105,7 @@ void
 _vte_ring_fini (VteRing *ring)
 {
 	gulong i;
-	GList *l;
+	auto image_map = ring->image_map;
 
 	for (i = 0; i <= ring->mask; i++)
 		_vte_row_data_fini (&ring->array[i]);
@@ -111,10 +113,10 @@ _vte_ring_fini (VteRing *ring)
 	g_free (ring->array);
 
 	/* Clear SIXEL images */
-	for (l = ring->image_list; l; l = g_list_next (l)) {
-		delete (vte::image::image_object *)l->data;
-		ring->image_list = g_list_delete_link (ring->image_list, l);
-	}
+	for (auto it = image_map->begin (); it != image_map->end (); ++it)
+		delete it->second;
+	image_map->clear();
+	delete ring->image_map;
 
 	if (ring->has_streams) {
 		g_object_unref (ring->attr_stream);
@@ -620,7 +622,6 @@ _vte_ring_reset_streams (VteRing *ring, gulong position)
 		_vte_stream_reset (ring->row_stream, position * sizeof (VteRowRecord));
 		_vte_stream_reset (ring->text_stream, _vte_stream_head (ring->text_stream));
 		_vte_stream_reset (ring->attr_stream, _vte_stream_head (ring->attr_stream));
-		_vte_stream_reset (ring->image_stream, _vte_stream_head (ring->image_stream));
 	}
 
 	ring->last_attr_text_start_offset = 0;
@@ -630,7 +631,7 @@ _vte_ring_reset_streams (VteRing *ring, gulong position)
 long
 _vte_ring_reset (VteRing *ring)
 {
-	GList *l;
+	auto image_map = ring->image_map;
 
         _vte_debug_print (VTE_DEBUG_RING, "Reseting the ring at %lu.\n", ring->end);
 
@@ -639,10 +640,11 @@ _vte_ring_reset (VteRing *ring)
         ring->cached_row_num = (gulong) -1;
 
 	/* Clear SIXEL images */
-	for (l = ring->image_list; l; l = g_list_next (l)) {
-		delete (vte::image::image_object *)l->data;
-		ring->image_list = g_list_delete_link (ring->image_list, l);
-	}
+	for (auto it = image_map->begin (); it != image_map->end (); ++it)
+		delete it->second;
+	image_map->clear();
+	if (ring->has_streams)
+		_vte_stream_reset (ring->image_stream, _vte_stream_head (ring->image_stream));
 
         return ring->end;
 }
@@ -1421,6 +1423,9 @@ err:
 /**
  * _vte_ring_append_image:
  * @ring: a #VteRing
+ * @surface: a Cairo surface object
+ * @pixelwidth: image width in pixels
+ * @pixelheight: image height in pixels
  * @left: left position of image in cell unit
  * @top: left position of image in cell unit
  * @width: width of image in cell unit
@@ -1433,8 +1438,10 @@ _vte_ring_append_image (VteRing *ring, cairo_surface_t *surface, gint pixelwidth
 {
 	using namespace vte::image;
 	image_object *image;
-	GList *l;
+	auto image_map = ring->image_map;
 	gulong char_width, char_height;
+
+	g_assert_true (image_map != NULL);
 
 	image = new (std::nothrow) image_object (surface, pixelwidth, pixelheight, left, top, width, height, ring->image_stream);
 	g_assert_true (image != NULL);
@@ -1443,19 +1450,100 @@ _vte_ring_append_image (VteRing *ring, cairo_surface_t *surface, gint pixelwidth
 	char_height = pixelwidth / height;
 
 	/* composition */
-	for (l = ring->image_list; l; (l = g_list_next(l))) {
-		if (image->includes ((image_object *)l->data)) {
-			delete (image_object *)l->data;
-			ring->image_list = g_list_delete_link (ring->image_list, l);
-		} else if (image && ((image_object *)l->data)->includes (image)) {
-			((image_object *)l->data)->combine (image, char_width, char_height);
+	for (auto it = image_map->lower_bound (top); it != image_map->end (); ++it) {
+		image_object *current = it->second;
+
+		/* Combine two images if one's area includes another's area */
+		if (image->includes (current)) {
+			/*
+			 * Replace current image with new image
+			 *
+			 *  +--------------+
+			 *  |     new      |
+			 *  | ...........  |
+			 *  | : current :  |
+			 *  | :.........:  |
+			 *  +--------------+
+			 */
+			image_map->erase (image->get_bottom ());
+			if (current->is_freezed())
+				ring->image_offscreen_resource_counter -= current->resource_size ();
+			else
+				ring->image_onscreen_resource_counter -= current->resource_size ();
+			delete current;
+		} else if (current->includes (image)) {
+			/*
+			 * Copy new image to current image's sub-area.
+                         *
+			 *  +--------------+
+			 *  | +-----+      |
+			 *  | | new |      |
+			 *  | +-----+      |
+			 *  |    current   |
+			 *  +--------------+
+			 */
+			if (current->is_freezed()) {
+				ring->image_offscreen_resource_counter -= current->resource_size ();
+				current->thaw ();
+			} else {
+				ring->image_onscreen_resource_counter -= current->resource_size ();
+			}
+			current->combine (image, char_width, char_height);
+			ring->image_onscreen_resource_counter += current->resource_size ();
 			delete image;
-			image = NULL;
+			goto end;
+		}
+
+		if ((current->get_bottom () - image->get_bottom ()) * (current->get_top () - image->get_top ()) <= 0) {
+                        /*
+			 * Unite two images if one's [top, bottom] includes another's [top, bottom].
+			 * This operation ensures bottom-position-based order is same to top-position-based order.
+			 *
+			 *              +------+
+			 *  +---------+ |      |
+			 *  | current | | new  |
+			 *  |         | |      |
+			 *  +---------+ |      |
+			 *              +------+
+			 *  or
+			 *
+			 *  +---------+
+			 *  | current | +------+
+			 *  |         | | new  |
+			 *  |         | +------+
+			 *  +---------+
+			 *          |
+			 *          v
+			 *  +------------------+
+			 *  | new (united)     |
+			 *  |                  |
+			 *  +------------------+
+			 */
+			image->unite (image, char_width, char_height);
+			image_map->erase (current->get_bottom ());
+			if (current->is_freezed())
+				ring->image_offscreen_resource_counter -= current->resource_size ();
+			else
+				ring->image_onscreen_resource_counter -= current->resource_size ();
+			delete current;
+			goto end;
 		}
 	}
 
-	if (image)
-		ring->image_list = g_list_append (ring->image_list, image);
+register_to_map:
+	/*
+	 * Now register new image to the image_map container.
+	 * the key is bottom positon.
+	 *  +----------+
+	 *  |   new    |
+	 *  |          |
+	 *  +----------+ <- bottom position (key)
+	 */
+	image_map->insert (std::make_pair (image->get_bottom (), image));
+	ring->image_onscreen_resource_counter += image->resource_size ();
+end:
+	/* noop */
+	;
 }
 
 void
@@ -1463,12 +1551,11 @@ _vte_ring_shrink_image_stream (VteRing *ring)
 {
 	using namespace vte::image;
 	image_object *first_image;
-	GList *l = ring->image_list;
 
-	if (! l)
+	if (ring->image_map->empty())
 		return;
 
-	first_image = (image_object *)l->data;
+	first_image = ring->image_map->begin()->second;
 
 	if (first_image->is_freezed ())
 		if (first_image->get_stream_position () > _vte_stream_tail (ring->image_stream))

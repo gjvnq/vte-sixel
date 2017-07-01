@@ -25,6 +25,7 @@
 
 #include <gio/gio.h>
 #include <vte/vte.h>
+#include <map>
 
 #include "vterowdata.h"
 #include "vtestream.h"
@@ -96,7 +97,12 @@ struct _VteRing {
                                                  An idx is allocated on hover even if the cell is scrolled out to the streams. */
         gulong hyperlink_maybe_gc_counter;  /* Do a GC when it reaches 65536. */
 
-        GList *image_list;  /* The SIXEL image list */
+        /* The SIXEL image list, registered with bottom position of image. */
+        std::map<gint, vte::image::image_object *> *image_map;
+
+        /* resource counters for image management */
+        size_t image_onscreen_resource_counter;  /* calculated amount size of in-memory or GPU-allocated images */
+        size_t image_offscreen_resource_counter;  /* calculated amount size of freezed images in VteBoa */
 };
 
 #define _vte_ring_contains(__ring, __position) \

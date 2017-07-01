@@ -3903,12 +3903,114 @@ next_match:
         /* After processing some data, do a hyperlink GC. The multiplier is totally arbitrary, feel free to fine tune. */
         _vte_ring_hyperlink_maybe_gc(m_screen->row_data, wcount * 4);
 
+	if (m_sixel_enabled) {
+		maybe_freeze_hidden_images ();
+		maybe_remove_images ();
+	}
+
 	_vte_debug_print (VTE_DEBUG_WORK, ")");
 	_vte_debug_print (VTE_DEBUG_IO,
 			"%ld chars and %ld bytes in %" G_GSIZE_FORMAT " chunks left to process.\n",
 			(long) unichars->len,
 			(long) _vte_incoming_chunks_length(m_incoming),
 			_vte_incoming_chunks_count(m_incoming));
+}
+
+void
+VteTerminalPrivate::maybe_remove_images ()
+{
+	VteRing *ring = m_screen->row_data;
+	auto image_map = ring->image_map;
+
+	/* If the resource amount of freezed images (serialized into VteBoa) exceeds the upper limit,
+	 * remove images from oldest.
+	 */
+	if (ring->image_offscreen_resource_counter > m_freezed_image_limit) {
+		_vte_debug_print (VTE_DEBUG_IMAGE,
+		                  "checked, offscreen: %zu, max: %zu\n",
+		                  ring->image_offscreen_resource_counter,
+		                  m_freezed_image_limit);
+		for (auto it = image_map->begin(); it != image_map->end();) {
+			vte::image::image_object *image = it->second;
+			++it;
+			image_map->erase (image->get_bottom ());
+			ring->image_offscreen_resource_counter -= image->resource_size ();
+			_vte_debug_print (VTE_DEBUG_IMAGE,
+			                  "deleted, offscreen: %zu\n",
+			                  ring->image_offscreen_resource_counter);
+			delete image;
+			if (ring->image_offscreen_resource_counter <= m_freezed_image_limit)
+				break;
+		}
+	}
+}
+
+void
+VteTerminalPrivate::maybe_freeze_hidden_images ()
+{
+	VteRing *ring = m_screen->row_data;
+	auto image_map = ring->image_map;
+
+	/* If the resource amount of in-memory (or GPU-allocated) images (= cairo_surface_t) exceeds the upper limit,
+	 * try to serialize hidden images. This limit is decided as follows:
+	 *
+	 *   widget screen height (in pixels) * widget screen width (in pixels) * 4 (planes) * 2 (times)
+	 */
+	if (ring->image_onscreen_resource_counter > (m_row_count * m_char_height) * (m_column_count * m_char_width) * 4 * 2);
+	{
+		using namespace vte::image;
+		using namespace vte::grid;
+		row_t top_of_view = first_displayed_row();
+		row_t bottom_of_view = last_displayed_row();
+
+		/* Freeze images that scroll out of view */
+
+		/* for images after view area */
+		for (auto it = image_map->lower_bound (bottom_of_view); it != image_map->end (); ++it) {
+			image_object *image = it->second;
+			if (image->get_top () > bottom_of_view && ! image->is_freezed ()) {
+				ring->image_onscreen_resource_counter -= image->resource_size ();
+				image->freeze ();
+				ring->image_offscreen_resource_counter += image->resource_size ();
+				_vte_debug_print (VTE_DEBUG_IMAGE,
+				                  "freezed, onscreen: %zu, offscreen: %zu\n",
+				                  ring->image_onscreen_resource_counter,
+				                  ring->image_offscreen_resource_counter);
+			}
+		}
+
+		/* for images before view area */
+		typedef std::remove_pointer<decltype(ring->image_map)>::type map_t;
+		for (auto it = map_t::reverse_iterator (image_map->lower_bound (top_of_view)); it != image_map->rend (); ++it) {
+			image_object *image = it->second;
+			if ((gulong)image->get_bottom () < ring->start) {
+				/* collect images out of scroll-back area */
+				do {
+					image = it->second;
+					if (image->is_freezed ())
+						ring->image_offscreen_resource_counter -= image->resource_size ();
+					else
+						ring->image_onscreen_resource_counter -= image->resource_size ();
+					image_map->erase (image->get_bottom ());
+					delete image;
+					_vte_debug_print (VTE_DEBUG_IMAGE,
+					                  "deleted, offscreen: %zu\n",
+					                  ring->image_offscreen_resource_counter);
+				} while (it != image_map->rend ());
+				if (ring->has_streams)
+					_vte_ring_shrink_image_stream (ring);
+				break;
+			} else if (! image->is_freezed ()) {
+				ring->image_onscreen_resource_counter -= image->resource_size ();
+				image->freeze ();
+				ring->image_offscreen_resource_counter += image->resource_size ();
+				_vte_debug_print (VTE_DEBUG_IMAGE,
+				                  "freezed, onscreen: %zu, offscreen: %zu\n",
+				                  ring->image_onscreen_resource_counter,
+				                  ring->image_offscreen_resource_counter);
+			}
+		}
+	}
 }
 
 void
@@ -9762,9 +9864,6 @@ VteTerminalPrivate::widget_draw(cairo_t *cr)
         int allocated_width, allocated_height;
         int extra_area_for_cursor;
         VteRing *ring = m_screen->row_data;
-	GList *l;
-        vte::grid::row_t top_row, bottom_row;
-	int image_shrink_flag = 0;
 
         if (!gdk_cairo_get_clip_rectangle (cr, &clip_rect))
                 return;
@@ -9789,32 +9888,31 @@ VteTerminalPrivate::widget_draw(cairo_t *cr)
 			 allocated_width, allocated_height,
                          get_color(VTE_DEFAULT_BG), m_background_alpha);
 
-	top_row = first_displayed_row();
-	bottom_row = last_displayed_row();
-
 	/* Draw SIXEL images */
-	for (l = ring->image_list; l; (l = g_list_next(l))) {
-		auto image = (vte::image::image_object *)l->data;
-		if (image->top + image->height < m_screen->scroll_delta - m_scrollback_lines) {
-			/* Collect unused images */
-			delete (image);
-			m_screen->row_data->image_list = g_list_delete_link (m_screen->row_data->image_list, l);
-			image_shrink_flag = 1;
-		}
-		else if (image->top + image->height < top_row || image->top > bottom_row) {
-			/* Freeze images that scroll out of view */
-			image->freeze ();
-		}
-		else {
+	if (m_sixel_enabled) {
+		vte::grid::row_t top_row = first_displayed_row();
+		vte::grid::row_t bottom_row = last_displayed_row();
+		auto image_map = ring->image_map;
+		auto it = image_map->lower_bound (top_row);
+		for (; it != image_map->end (); ++it) {
+			vte::image::image_object *image = it->second;
+			if (image->get_top () > bottom_row)
+				break;
+			if (image->is_freezed ()) {
+				ring->image_offscreen_resource_counter -= image->resource_size ();
+				image->thaw ();
+				ring->image_onscreen_resource_counter += image->resource_size ();
+				_vte_debug_print (VTE_DEBUG_IMAGE,
+				                  "thawn, onscreen: %zu, offscreen: %zu\n",
+				                  ring->image_onscreen_resource_counter,
+				                  ring->image_offscreen_resource_counter);
+			}
 			/* Display images */
-			int x = m_padding.left + image->left * m_char_width;
-			int y = m_padding.top + (image->top - m_screen->scroll_delta) * m_char_height;
-			image->paint(cr, x, y);
+			int x = m_padding.left + image->get_left () * m_char_width;
+			int y = m_padding.top + (image->get_top () - m_screen->scroll_delta) * m_char_height;
+			image->paint (cr, x, y);
 		}
-	}
-
-	if (image_shrink_flag) {
-		_vte_ring_shrink_image_stream (ring);
+		maybe_freeze_hidden_images ();
 	}
 
         /* Clip vertically, for the sake of smooth scrolling. We want the top and bottom paddings to be unused.
