@@ -7676,6 +7676,16 @@ VteTerminalPrivate::set_font_scale(gdouble scale)
         return true;
 }
 
+bool
+VteTerminalPrivate::set_freezed_image_limit(gulong limit)
+{
+        g_assert(limit >= 0);
+
+        m_freezed_image_limit = limit;
+
+        return true;
+}
+
 /* Read and refresh our perception of the size of the PTY. */
 void
 VteTerminalPrivate::refresh_size()
@@ -7829,6 +7839,14 @@ VteTerminalPrivate::screen_set_size(VteScreen *screen_,
 		queue_adjustment_value_changed(new_scroll_delta);
 	else
 		screen_->scroll_delta = new_scroll_delta;
+}
+
+bool
+VteTerminalPrivate::set_sixel_enabled(gboolean enabled)
+{
+        m_sixel_enabled = enabled;
+
+        return true;
 }
 
 void
@@ -8136,6 +8154,10 @@ VteTerminalPrivate::VteTerminalPrivate(VteTerminal *t) :
 
         m_allow_hyperlink = FALSE;
         m_hyperlink_auto_id = 0;
+
+        /* Image */
+        m_freezed_image_limit = VTE_DEFAULT_FREEZED_IMAGE_LIMIT;
+        m_sixel_enabled = TRUE;
 
 	/* Not all backends generate GdkVisibilityNotify, so mark the
 	 * window as unobscured initially. */

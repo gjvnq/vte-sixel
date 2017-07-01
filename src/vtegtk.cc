@@ -1390,6 +1390,17 @@ vte_terminal_class_init(VteTerminalClass *klass)
                                      (GParamFlags) (G_PARAM_READABLE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
 
         /**
+         * VteTerminal:freezed-image-limit:
+         *
+         * This property indicates allowed max storage size for offscreen freezed images
+         */
+        pspecs[PROP_FREEZED_IMAGE_LIMIT] =
+                g_param_spec_ulong ("freezed-image-limit", NULL, NULL,
+                                    0, G_MAXULONG, VTE_DEFAULT_FREEZED_IMAGE_LIMIT,
+                                    (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
+
+
+        /**
          * VteTerminal:input-enabled:
          *
          * Controls whether the terminal allows user input. When user input is disabled,
@@ -1472,6 +1483,17 @@ vte_terminal_class_init(VteTerminalClass *klass)
                 g_param_spec_boolean ("scroll-on-output", NULL, NULL,
                                       TRUE,
                                       (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
+
+        /**
+         * VteTerminal:sixel-enabled:
+         *
+         * Controls whether the SIXEL graphics feature is enabled.
+         */
+        pspecs[PROP_SIXEL_ENABLED] =
+                g_param_spec_boolean ("sixel-enabled", NULL, NULL,
+                                      TRUE,
+                                      (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
+
 
         /**
          * VteTerminal:window-title:
@@ -3940,3 +3962,67 @@ vte_terminal_write_contents_sync (VteTerminal *terminal,
 
         return IMPL(terminal)->write_contents_sync(stream, flags, cancellable, error);
 }
+
+/**
+ * vte_terminal_set_freezed_image_limit:
+ * @terminal: a #VteTerminal
+ * @limit: 0 to G_MAXINT
+ *
+ * Set allowed max storage size for offscreen freezed images
+ */
+void
+vte_terminal_set_freezed_image_limit(VteTerminal *terminal, gulong limit)
+{
+        g_return_if_fail(VTE_IS_TERMINAL(terminal));
+
+        if (IMPL(terminal)->set_freezed_image_limit(limit))
+                g_object_notify_by_pspec(G_OBJECT(terminal), pspecs[PROP_FREEZED_IMAGE_LIMIT]);
+}
+
+/**
+ * vte_terminal_get_freezed_image_limit:
+ * @terminal: a #VteTerminal
+ *
+ * Get allowed max storage size for offscreen freezed images
+ */
+gulong
+vte_terminal_get_freezed_image_limit(VteTerminal *terminal)
+{
+        g_return_val_if_fail(VTE_IS_TERMINAL(terminal), NULL);
+
+        return IMPL(terminal)->m_freezed_image_limit;
+}
+
+/**
+ * vte_terminal_set_sixel_enabled:
+ * @terminal: a #VteTerminal
+ * @enabled: %TRUE enables SIXEL graphics feature.
+ *
+ * Set whether to enable SIXEL graphics feature
+ */
+void
+vte_terminal_set_sixel_enabled (VteTerminal *terminal, gboolean enabled)
+{
+        g_return_if_fail(VTE_IS_TERMINAL(terminal));
+
+        if (IMPL(terminal)->set_sixel_enabled(enabled))
+                g_object_notify_by_pspec(G_OBJECT(terminal), pspecs[PROP_SIXEL_ENABLED]);
+}
+
+/**
+ * vte_terminal_set_sixel_enabled:
+ * @terminal: a #VteTerminal
+ *
+ * Get whether the SIXEL graphics feature is enabled.
+ *
+ * Returns: %TRUE if SIXEL graphics feature is enabled.
+ */
+
+gboolean
+vte_terminal_get_sixel_enabled (VteTerminal *terminal)
+{
+        g_return_val_if_fail(VTE_IS_TERMINAL(terminal), NULL);
+
+        return IMPL(terminal)->m_sixel_enabled;
+}
+

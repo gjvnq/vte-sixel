@@ -86,6 +86,7 @@
 #define VTE_MAX_PROCESS_TIME		100
 #define VTE_CELL_BBOX_SLACK		1
 #define VTE_DEFAULT_UTF8_AMBIGUOUS_WIDTH 1
+#define VTE_DEFAULT_FREEZED_IMAGE_LIMIT (16 * 1024 * 1024)  /* 16 MB */
 
 #define VTE_UTF8_BPC                    (6) /* Maximum number of bytes used per UTF-8 character */
 

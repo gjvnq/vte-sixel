@@ -3131,7 +3131,8 @@ vte_sequence_handler_device_control_string (VteTerminalPrivate *that, GValueArra
 dispatch:
 	switch (cmd) {
 	case 'q':
-		that->seq_load_sixel(dcs);
+		if (that->m_sixel_enabled)
+			that->seq_load_sixel(dcs);
 		break;
 	default:
 		break;
