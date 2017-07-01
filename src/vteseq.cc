@@ -2340,8 +2340,13 @@ vte_sequence_handler_return_terminal_status (VteTerminalPrivate *that, GValueArr
 static void
 vte_sequence_handler_send_primary_device_attributes (VteTerminalPrivate *that, GValueArray *params)
 {
-	/* Claim to be a VT220 with only national character set support. */
-        that->feed_child("\e[?62;4c", -1);
+	if (that->m_sixel_enabled) {
+		/* Claim to be a VT220 with SIXEL graphics support. */
+		that->feed_child("\e[?62;4c", -1);
+	} else {
+		/* Claim to be a VT220 */
+		that->feed_child("\e[?62c", -1);
+	}
 }
 
 /* Send terminal ID. */

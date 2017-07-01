@@ -1474,7 +1474,7 @@ _vte_ring_append_image (VteRing *ring, cairo_surface_t *surface, gint pixelwidth
 		} else if (current->includes (image)) {
 			/*
 			 * Copy new image to current image's sub-area.
-                         *
+			 *
 			 *  +--------------+
 			 *  | +-----+      |
 			 *  | | new |      |
