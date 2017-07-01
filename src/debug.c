@@ -54,6 +54,7 @@ _vte_debug_init(void)
     { "resize",       VTE_DEBUG_RESIZE       },
     { "regex",        VTE_DEBUG_REGEX        },
     { "hyperlink",    VTE_DEBUG_HYPERLINK    },
+    { "image",        VTE_DEBUG_IMAGE        },
   };
 
   _vte_debug_flags = g_parse_debug_string (g_getenv("VTE_DEBUG"),
