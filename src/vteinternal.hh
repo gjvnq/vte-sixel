@@ -1203,8 +1203,6 @@ public:
                                                       int osc,
                                                       char const *terminator);
         void seq_load_sixel(char const* p);
-        void maybe_freeze_hidden_images();
-        void maybe_remove_images ();
         void subscribe_accessible_events();
         void select_text(vte::grid::column_t start_col,
                          vte::grid::row_t start_row,
@@ -1212,6 +1210,11 @@ public:
                          vte::grid::row_t end_row);
         void select_empty(vte::grid::column_t col,
                           vte::grid::row_t row);
+
+private:
+        void freeze_hidden_images_before_view_area(double start_pos, double end_pos);
+        void freeze_hidden_images_after_view_area(double start_pos, double end_pos);
+        void maybe_remove_images();
 };
 
 extern GTimer *process_timer;
