@@ -284,7 +284,6 @@ vte_terminal_accessible_update_private_data_if_needed(VteTerminalAccessible *acc
 
 		/* Get a new view of the uber-label. */
 		priv->snapshot_text = impl->get_text_displayed_a11y(true /* wrap */,
-                                                                             true /* include trailing whitespace */,
                                                                              priv->snapshot_attributes);
 
 		/* Get the offsets to the beginnings of each character. */
@@ -1326,7 +1325,7 @@ vte_terminal_accessible_get_character_extents(AtkText *text, gint offset,
         VteTerminalAccessible *accessible = VTE_TERMINAL_ACCESSIBLE(text);
 	VteTerminalAccessiblePrivate *priv = (VteTerminalAccessiblePrivate *)_vte_terminal_accessible_get_instance_private(accessible);
 	VteTerminal *terminal;
-	glong char_width, char_height;
+	glong cell_width, cell_height;
 	gint base_x, base_y, w, h;
 
 	vte_terminal_accessible_update_private_data_if_needed(accessible,
@@ -1335,12 +1334,12 @@ vte_terminal_accessible_get_character_extents(AtkText *text, gint offset,
 
 	atk_component_get_extents (ATK_COMPONENT (text), &base_x, &base_y, &w, &h, coords);
 	xy_from_offset (priv, offset, x, y);
-	char_width = vte_terminal_get_char_width (terminal);
-	char_height = vte_terminal_get_char_height (terminal);
-	*x *= char_width;
-	*y *= char_height;
-	*width = char_width;
-	*height = char_height;
+	cell_width = vte_terminal_get_char_width (terminal);
+	cell_height = vte_terminal_get_char_height (terminal);
+	*x *= cell_width;
+	*y *= cell_height;
+	*width = cell_width;
+	*height = cell_height;
 	*x += base_x;
 	*y += base_y;
 }
@@ -1365,7 +1364,7 @@ vte_terminal_accessible_get_offset_at_point(AtkText *text,
         VteTerminalAccessible *accessible = VTE_TERMINAL_ACCESSIBLE(text);
 	VteTerminalAccessiblePrivate *priv = (VteTerminalAccessiblePrivate *)_vte_terminal_accessible_get_instance_private(accessible);
 	VteTerminal *terminal;
-	glong char_width, char_height;
+	glong cell_width, cell_height;
 	gint base_x, base_y, w, h;
 
 	vte_terminal_accessible_update_private_data_if_needed(accessible,
@@ -1373,12 +1372,12 @@ vte_terminal_accessible_get_offset_at_point(AtkText *text,
 	terminal = VTE_TERMINAL (gtk_accessible_get_widget (GTK_ACCESSIBLE (text)));
 
 	atk_component_get_extents (ATK_COMPONENT (text), &base_x, &base_y, &w, &h, coords);
-	char_width = vte_terminal_get_char_width (terminal);
-	char_height = vte_terminal_get_char_height (terminal);
+	cell_width = vte_terminal_get_char_width (terminal);
+	cell_height = vte_terminal_get_char_height (terminal);
 	x -= base_x;
 	y -= base_y;
-	x /= char_width;
-	y /= char_height;
+	x /= cell_width;
+	y /= cell_height;
 	return offset_from_xy (priv, x, y);
 }
 
@@ -1422,14 +1421,11 @@ vte_terminal_accessible_get_selection(AtkText *text, gint selection_number,
 
         auto impl = IMPL_FROM_WIDGET(widget);
 
-	if (!impl->m_has_selection || impl->m_selection[VTE_SELECTION_PRIMARY] == nullptr)
+        if (impl->m_selection_resolved.empty() || impl->m_selection[VTE_SELECTION_PRIMARY] == nullptr)
 		return NULL;
 
-        auto start_sel = impl->m_selection_start;
-        auto end_sel = impl->m_selection_end;
-
-	*start_offset = offset_from_xy (priv, start_sel.col, start_sel.row);
-	*end_offset = offset_from_xy (priv, end_sel.col, end_sel.row);
+        *start_offset = offset_from_xy (priv, impl->m_selection_resolved.start_column(), impl->m_selection_resolved.start_row());
+        *end_offset = offset_from_xy (priv, impl->m_selection_resolved.end_column(), impl->m_selection_resolved.end_row());
 
 	return g_strdup(impl->m_selection[VTE_SELECTION_PRIMARY]->str);
 }
@@ -1583,8 +1579,8 @@ vte_terminal_accessible_set_size(AtkComponent *component,
         width -= impl->m_padding.left + impl->m_padding.right;
         height -= impl->m_padding.top + impl->m_padding.bottom;
 
-        auto columns = width / impl->m_char_width;
-        auto rows = height / impl->m_char_height;
+        auto columns = width / impl->m_cell_width;
+        auto rows = height / impl->m_cell_height;
         if (columns <= 0 || rows <= 0)
                 return FALSE;
 

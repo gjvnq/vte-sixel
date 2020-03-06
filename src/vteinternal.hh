@@ -18,18 +18,49 @@
 
 #pragma once
 
+/* BEGIN sanity checks */
+
+/* Some distributions pass -fexceptions in a way that overrides vte's
+ * own -fno-exceptions. This is a hard error; fail the build.
+ * See https://gitlab.gnome.org/GNOME/gnome-build-meta/issues/207
+ */
+#ifdef __EXCEPTIONS
+#error You MUST NOT use -fexceptions to build vte! Fix your build; and DO NOT file a bug upstream!
+#endif
+
+/* While we're at it, check -fno-rtti too */
+#ifdef __GXX_RTTI
+#error You MUST NOT use -frtti to build vte! Fix your build system; and DO NOT file a bug upstream!
+#endif
+
+/* END sanity checks */
+
 #include <glib.h>
 
 #include "vtedefines.hh"
 #include "vtetypes.hh"
+#include "vtedraw.hh"
 #include "reaper.hh"
-#include "ring.h"
-#include "vteconv.h"
+#include "ring.hh"
+#include "ringview.hh"
 #include "buffer.h"
+#include "parser.hh"
+#include "parser-glue.hh"
+#include "modes.hh"
+#include "tabstops.hh"
+#include "refptr.hh"
 
 #include "vtepcre2.h"
 #include "vteregexinternal.hh"
 #include "sixel.h"
+
+#include "chunk.hh"
+#include "utf8.hh"
+
+#include <list>
+#include <queue>
+#include <string>
+#include <vector>
 
 typedef enum {
         VTE_REGEX_CURSOR_GDKCURSOR,
@@ -46,6 +77,41 @@ typedef enum {
 	MOUSE_TRACKING_CELL_MOTION_TRACKING,
 	MOUSE_TRACKING_ALL_MOTION_TRACKING
 } MouseTrackingMode;
+
+enum {
+        VTE_XTERM_WM_RESTORE_WINDOW = 1,
+        VTE_XTERM_WM_MINIMIZE_WINDOW = 2,
+        VTE_XTERM_WM_SET_WINDOW_POSITION = 3,
+        VTE_XTERM_WM_SET_WINDOW_SIZE_PIXELS = 4,
+        VTE_XTERM_WM_RAISE_WINDOW = 5,
+        VTE_XTERM_WM_LOWER_WINDOW = 6,
+        VTE_XTERM_WM_REFRESH_WINDOW = 7,
+        VTE_XTERM_WM_SET_WINDOW_SIZE_CELLS = 8,
+        VTE_XTERM_WM_MAXIMIZE_WINDOW = 9,
+        VTE_XTERM_WM_FULLSCREEN_WINDOW = 10,
+        VTE_XTERM_WM_GET_WINDOW_STATE = 11,
+        VTE_XTERM_WM_GET_WINDOW_POSITION = 13,
+        VTE_XTERM_WM_GET_WINDOW_SIZE_PIXELS = 14,
+        VTE_XTERM_WM_GET_WINDOW_SIZE_CELLS = 18,
+        VTE_XTERM_WM_GET_SCREEN_SIZE_CELLS = 19,
+        VTE_XTERM_WM_GET_ICON_TITLE = 20,
+        VTE_XTERM_WM_GET_WINDOW_TITLE = 21,
+        VTE_XTERM_WM_TITLE_STACK_PUSH = 22,
+        VTE_XTERM_WM_TITLE_STACK_POP = 23,
+};
+
+enum {
+        VTE_SGR_COLOR_SPEC_RGB    = 2,
+        VTE_SGR_COLOR_SPEC_LEGACY = 5
+};
+
+enum {
+        VTE_BIDI_FLAG_IMPLICIT   = 1 << 0,
+        VTE_BIDI_FLAG_RTL        = 1 << 1,
+        VTE_BIDI_FLAG_AUTO       = 1 << 2,
+        VTE_BIDI_FLAG_BOX_MIRROR = 1 << 3,
+        VTE_BIDI_FLAG_ALL        = (1 << 4) - 1,
+};
 
 struct vte_regex_and_flags {
         VteRegex *regex;
@@ -69,13 +135,6 @@ typedef enum _VteCharacterReplacement {
         VTE_CHARACTER_REPLACEMENT_LINE_DRAWING,
         VTE_CHARACTER_REPLACEMENT_BRITISH
 } VteCharacterReplacement;
-
-/* The terminal's keypad/cursor state.  A terminal can either be using the
- * normal keypad, or the "application" keypad. */
-typedef enum _VteKeymode {
-	VTE_KEYMODE_NORMAL,
-	VTE_KEYMODE_APPLICATION
-} VteKeymode;
 
 typedef struct _VtePaletteColor {
 	struct {
@@ -107,32 +166,30 @@ typedef enum _VteCursorStyle {
         VTE_CURSOR_STYLE_STEADY_IBEAM     = 6
 } VteCursorStyle;
 
-typedef struct _vte_incoming_chunk _vte_incoming_chunk_t;
-struct _vte_incoming_chunk{
-        _vte_incoming_chunk_t *next;
-        guint len;
-        guchar dataminusone;    /* Hack: Keep it right before data, so that data[-1] is valid and usable */
-        guchar data[VTE_INPUT_CHUNK_SIZE - 2 * sizeof(void *) - 1];
-};
+struct VteScreen {
+public:
+        VteScreen(gulong max_rows,
+                  bool has_streams) :
+                m_ring{max_rows, has_streams},
+                row_data(&m_ring),
+                cursor{0,0}
+        {
+        }
 
-typedef struct _VteScreen VteScreen;
-struct _VteScreen {
-        VteRing row_data[1];	/* buffer contents */
+        vte::base::Ring m_ring; /* buffer contents */
+        VteRing* row_data;
         VteVisualPosition cursor;  /* absolute value, from the beginning of the terminal history */
-        double scroll_delta;	/* scroll offset */
-        long insert_delta;	/* insertion offset */
+        double scroll_delta{0.0}; /* scroll offset */
+        long insert_delta{0}; /* insertion offset */
 
         /* Stuff saved along with the cursor */
         struct {
                 VteVisualPosition cursor;  /* onscreen coordinate, that is, relative to insert_delta */
-                gboolean reverse_mode;
-                gboolean origin_mode;
-                gboolean sendrecv_mode;
-                gboolean insert_mode;
-                gboolean linefeed_mode;
+                uint8_t modes_ecma;
+                bool reverse_mode;
+                bool origin_mode;
                 VteCell defaults;
                 VteCell color_defaults;
-                VteCell fill_defaults;
                 VteCharacterReplacement character_replacements[2];
                 VteCharacterReplacement *character_replacement;
         } saved;
@@ -257,29 +314,35 @@ private:
         Request *m_request;
 };
 
-/* Terminal private data. */
-class VteTerminalPrivate {
+namespace vte {
+
+namespace platform {
+class Widget;
+}
+
+namespace terminal {
+
+class Terminal {
 public:
-        VteTerminalPrivate(VteTerminal *t);
-        ~VteTerminalPrivate();
+        Terminal(vte::platform::Widget* w,
+                 VteTerminal *t);
+        ~Terminal();
 
 public:
+        vte::platform::Widget* m_real_widget;
         VteTerminal *m_terminal;
         GtkWidget *m_widget;
 
-        /* Event window */
-        GdkWindow *m_event_window;
-
         /* Metric and sizing data: dimensions of the window */
-        vte::grid::row_t m_row_count;
-        vte::grid::column_t m_column_count;
+        vte::grid::row_t m_row_count{VTE_ROWS};
+        vte::grid::column_t m_column_count{VTE_COLUMNS};
 
-	/* Emulation setup data. */
-        struct _vte_matcher *m_matcher;   /* control sequence matcher */
-        gboolean m_autowrap;              /* auto wraparound at right margin */
-        int m_keypad_mode, m_cursor_mode; /* these would be VteKeymodes, but we
-					   need to guarantee its type */
-        GHashTable *m_dec_saved;
+        vte::terminal::Tabstops m_tabstops{};
+
+        vte::parser::Parser m_parser; /* control sequence state machine */
+
+        vte::terminal::modes::ECMA m_modes_ecma{};
+        vte::terminal::modes::Private m_modes_private{};
 
 	/* PTY handling data. */
         VtePty *m_pty;
@@ -287,15 +350,19 @@ public:
         guint m_pty_input_source;
         guint m_pty_output_source;
         gboolean m_pty_input_active;
-        GPid m_pty_pid;	                /* pid of child process */
+        pid_t m_pty_pid{-1};           /* pid of child process */
         VteReaper *m_reaper;
 
-	/* Input data queues. */
+	/* Queue of chunks of data read from the PTY.
+         * Chunks are inserted at the back, and processed from the front.
+         */
+        std::queue<vte::base::Chunk::unique_type, std::list<vte::base::Chunk::unique_type>> m_incoming_queue;
+
+        vte::base::UTF8Decoder m_utf8_decoder;
+        bool m_using_utf8{true};
         const char *m_encoding;            /* the pty's encoding */
         int m_utf8_ambiguous_width;
-        struct _vte_iso2022_state *m_iso2022;
-        _vte_incoming_chunk_t *m_incoming; /* pending bytestream */
-        GArray *m_pending;                 /* pending characters */
+        gunichar m_last_graphic_character; /* for REP */
         /* Array of dirty rectangles in view coordinates; need to
          * add allocation origin and padding when passing to gtk.
          */
@@ -306,85 +373,74 @@ public:
          */
         GList *m_active_terminals_link;
         // FIXMEchpe should these two be g[s]size ?
-        glong m_input_bytes;
+        size_t m_input_bytes;
         glong m_max_input_bytes;
 
 	/* Output data queue. */
         VteByteArray *m_outgoing; /* pending input characters */
-        VteConv m_outgoing_conv;
 
-	/* IConv buffer. */
+#ifdef WITH_ICONV
+        /* Legacy charset support */
+        GIConv m_incoming_conv{GIConv(-1)};
+        VteByteArray* m_incoming_leftover;
+        GIConv m_outgoing_conv{GIConv(-1)};
         VteByteArray *m_conv_buffer;
+
+        void convert_incoming() noexcept;
+#endif
 
 	/* Screen data.  We support the normal screen, and an alternate
 	 * screen, which seems to be a DEC-specific feature. */
-        struct _VteScreen m_normal_screen, m_alternate_screen, *m_screen;
+        VteScreen m_normal_screen;
+        VteScreen m_alternate_screen;
+        VteScreen *m_screen; /* points to either m_normal_screen or m_alternate_screen */
 
-        /* Values we save along with the cursor */
-        gboolean m_reverse_mode;  /* reverse mode */
-        gboolean m_origin_mode;   /* origin mode */
-        gboolean m_sendrecv_mode; /* sendrecv mode */
-        gboolean m_insert_mode;   /* insert mode */
-        gboolean m_linefeed_mode; /* linefeed mode */
-        VteCell m_defaults;       /* default characteristics
-                                     for insertion of any new
-                                     characters */
-        VteCell m_color_defaults; /* original defaults
-                                     plus the current
-                                     fore/back */
-        VteCell m_fill_defaults;  /* original defaults
-                                     plus the current
-                                     fore/back with no
-                                     character data */
+        VteCell m_defaults;        /* Default characteristics for insertion of new characters:
+                                      colors (fore, back, deco) and other attributes (bold, italic,
+                                      explicit hyperlink etc.). */
+        VteCell m_color_defaults;  /* Default characteristics for erasing characters:
+                                      colors (fore, back, deco) but no other attributes,
+                                      and the U+0000 character that denotes erased cells. */
+
         VteCharacterReplacement m_character_replacements[2];  /* charsets in the G0 and G1 slots */
         VteCharacterReplacement *m_character_replacement;     /* pointer to the active one */
 
         /* Word chars */
-        char *m_word_char_exceptions_string;
-        gunichar *m_word_char_exceptions;
-        gsize m_word_char_exceptions_len;
+        std::string m_word_char_exceptions_string;
+        std::u32string m_word_char_exceptions;
 
 	/* Selection information. */
-        gboolean m_has_selection;
         gboolean m_selecting;
-        gboolean m_selecting_after_threshold;
-        gboolean m_selecting_restart;
+        gboolean m_will_select_after_threshold;
         gboolean m_selecting_had_delta;
-        gboolean m_selection_block_mode;
+        gboolean m_selection_block_mode;  // FIXMEegmont move it into a 4th value in vte_selection_type?
         enum vte_selection_type m_selection_type;
-        vte::view::coords m_selection_origin, m_selection_last;
-        VteVisualPosition m_selection_start, m_selection_end;
+        vte::grid::halfcoords m_selection_origin, m_selection_last;  /* BiDi: logical in normal modes, visual in m_selection_block_mode */
+        vte::grid::span m_selection_resolved;
 
 	/* Clipboard data information. */
-        // FIXMEchpe check if this can make m_has_selection obsolete!
         bool m_selection_owned[LAST_VTE_SELECTION];
         VteFormat m_selection_format[LAST_VTE_SELECTION];
         bool m_changing_selection;
-        GString *m_selection[LAST_VTE_SELECTION];
+        GString *m_selection[LAST_VTE_SELECTION];  // FIXMEegmont rename this so that m_selection_resolved can become m_selection?
         GtkClipboard *m_clipboard[LAST_VTE_SELECTION];
 
-        ClipboardTextRequestGtk<VteTerminalPrivate> m_paste_request;
+        ClipboardTextRequestGtk<Terminal> m_paste_request;
 
 	/* Miscellaneous options. */
         VteEraseBinding m_backspace_binding;
         VteEraseBinding m_delete_binding;
-        gboolean m_meta_sends_escape;
         gboolean m_audible_bell;
-        gboolean m_margin_bell;
-        guint m_bell_margin;
         gboolean m_allow_bold;
-        gboolean m_deccolm_mode; /* DECCOLM allowed */
-        GHashTable *m_tabstops;
+        gboolean m_bold_is_bright;
         gboolean m_text_modified_flag;
         gboolean m_text_inserted_flag;
         gboolean m_text_deleted_flag;
         gboolean m_rewrap_on_resize;
-        gboolean m_bracketed_paste_mode;
 
 	/* Scrolling options. */
         gboolean m_scroll_on_output;
         gboolean m_scroll_on_keystroke;
-        gboolean m_alternate_screen_scroll;
         vte::grid::row_t m_scrollback_lines;
 
         /* Restricted scrolling */
@@ -403,8 +459,14 @@ public:
         gint m_cursor_blink_timeout;        /* gtk-cursor-blink-timeout */
         gboolean m_cursor_blinks;           /* whether the cursor is actually blinking */
         gint64 m_cursor_blink_time;         /* how long the cursor has been blinking yet */
-        gboolean m_cursor_visible;
         gboolean m_has_focus;               /* is the terminal window focused */
+
+        /* Contents blinking */
+        VteTextBlinkMode m_text_blink_mode;
+        gint m_text_blink_cycle;  /* gtk-cursor-blink-time / 2 */
+        bool m_text_blink_state;  /* whether blinking text should be visible at this very moment */
+        bool m_text_to_blink;     /* drawing signals here if it encounters any cell with blink attribute */
+        guint m_text_blink_tag;   /* timeout ID for redrawing due to blinking */
 
         /* DECSCUSR cursor style (shape and blinking possibly overridden
          * via escape sequence) */
@@ -414,22 +476,16 @@ public:
         gboolean m_input_enabled;
         time_t m_last_keypress_time;
 
-        int m_mouse_tracking_mode; /* this is of type MouseTrackingMode,
-                                      but we need to guarantee its type. */
+        MouseTrackingMode m_mouse_tracking_mode{MOUSE_TRACKING_NONE};
         guint m_mouse_pressed_buttons;      /* bits 0, 1, 2 resp. for buttons 1, 2, 3 */
         guint m_mouse_handled_buttons;      /* similar bitmap for buttons we handled ourselves */
         /* The last known position the mouse pointer from an event. We don't store
          * this in grid coordinates because we want also to check if they were outside
-         * the viewable area.
+         * the viewable area, and also want to catch in-cell movements if they make the pointer visible.
          */
         vte::view::coords m_mouse_last_position;
-        gboolean m_mouse_autohide;
         guint m_mouse_autoscroll_tag;
-        gboolean m_mouse_xterm_extension;
-        gboolean m_mouse_urxvt_extension;
-        double m_mouse_smooth_scroll_delta;
-
-        gboolean m_focus_tracking_mode;
+        double m_mouse_smooth_scroll_delta{0.0};
 
         /* SIXEL feature */
         gboolean m_sixel_display_mode;
@@ -451,10 +507,6 @@ public:
          * a match for any of the dingu regexes.
          */
         vte::grid::span m_match_span;
-        /* Whether the match is being highlighted.
-         * Only used if m_match is non-null.
-         */
-        bool m_show_match;
 
 	/* Search data. */
         struct vte_regex_and_flags m_search_regex;
@@ -467,32 +519,62 @@ public:
         PangoFontDescription *m_fontdesc;
         gdouble m_font_scale;
         gboolean m_fontdirty;
-        glong m_char_ascent;
-        glong m_char_descent;
-        /* dimensions of character cells */
-        glong m_char_width;
-        glong m_char_height;
+
+        /* First, the dimensions of ASCII characters are measured. The result
+         * could probably be called char_{width,height} or font_{width,height}
+         * but these aren't stored directly here, not to accidentally be confused
+         * with m_cell_{width_height}. The values are stored in vtedraw's font_info.
+         *
+         * Then in case of nondefault m_cell_{width,height}_scale an additional
+         * m_char_padding is added, resulting in m_cell_{width,height} which are
+         * hence potentially larger than the characters. This is to implement
+         * line spacing and letter spacing, primarly for accessibility (bug 781479).
+         *
+         * Char width/height, if really needed, can be computed by subtracting
+         * the char padding from the cell dimensions. Char height can also be
+         * reconstructed from m_char_{ascent,descent}, one of which is redundant,
+         * stored for convenience only.
+         */
+        long m_char_ascent;
+        long m_char_descent;
+        double m_cell_width_scale;
+        double m_cell_height_scale;
+        GtkBorder m_char_padding;
+        glong m_cell_width;
+        glong m_cell_height;
+
+        /* We allow the cell's text to draw a bit outside the cell at the top
+         * and bottom. The following two functions return how much is the
+         * maximally allowed overdraw (in px).
+         */
+        inline constexpr auto cell_overflow_top() const noexcept
+        {
+                /* Allow overdrawing up into the underline of the cell on top */
+                return int(m_cell_height - m_underline_position);
+        }
+
+        inline constexpr auto cell_overflow_bottom() const noexcept
+        {
+                /* Allow overdrawing up into the overline of the cell on bottom */
+                return int(m_overline_position + m_overline_thickness);
+        }
 
 	/* Data used when rendering the text which reflects server resources
 	 * and data, which should be dropped when unrealizing and (re)created
 	 * when realizing. */
         struct _vte_draw *m_draw;
+        bool m_clear_background{true};
 
         VtePaletteColor m_palette[VTE_PALETTE_SIZE];
 
 	/* Mouse cursors. */
-        gboolean m_mouse_cursor_over_widget;
-        gboolean m_mouse_cursor_autohidden;  /* whether the autohiding logic wants to hide it; even if autohiding is disabled */
-        gboolean m_mouse_cursor_visible;     /* derived value really containing if it's actually visible */
-        GdkCursor* m_mouse_default_cursor;
-        GdkCursor* m_mouse_mousing_cursor;
-        GdkCursor* m_mouse_hyperlink_cursor;
-	GdkCursor* m_mouse_inviso_cursor;
+        gboolean m_mouse_cursor_over_widget; /* as per enter and leave events */
+        gboolean m_mouse_autohide;           /* the API setting */
+        gboolean m_mouse_cursor_autohidden;  /* whether the autohiding logic wants to hide it; even if autohiding is disabled via API */
 
 	/* Input method support. */
-        GtkIMContext *m_im_context;
-        gboolean m_im_preedit_active;
-        char *m_im_preedit;
+        bool m_im_preedit_active;
+        std::string m_im_preedit;
         PangoAttrList *m_im_preedit_attrs;
         int m_im_preedit_cursor;
 
@@ -504,30 +586,43 @@ public:
         gboolean m_cursor_moved_pending;
         gboolean m_contents_changed_pending;
 
-	/* window name changes */
-        char* m_window_title;
-        char* m_window_title_changed;
-        char* m_icon_title;
-        char* m_icon_title_changed;
-        char* m_current_directory_uri;
-        char* m_current_directory_uri_changed;
-        char* m_current_file_uri;
-        char* m_current_file_uri_changed;
+        std::string m_window_title{};
+        std::string m_current_directory_uri{};
+        std::string m_current_file_uri{};
+        std::string m_window_title_pending{};
+        std::string m_current_directory_uri_pending{};
+        std::string m_current_file_uri_pending{};
+        bool m_window_title_changed{false};
+        bool m_current_directory_uri_changed{false};
+        bool m_current_file_uri_changed{false};
+
+        std::vector<std::string> m_window_title_stack{};
 
 	/* Background */
         double m_background_alpha;
 
+        /* Bell */
+        int64_t m_bell_timestamp;
+        bool m_bell_pending{false};
+
 	/* Key modifiers. */
         guint m_modifiers;
-
-	/* Obscured? state. */
-        GdkVisibilityState m_visibility_state;
 
 	/* Font stuff. */
         gboolean m_has_fonts;
         long m_line_thickness;
         long m_underline_position;
+        long m_underline_thickness;
+        long m_double_underline_position;
+        long m_double_underline_thickness;
+        double m_undercurl_position;
+        double m_undercurl_thickness;
         long m_strikethrough_position;
+        long m_strikethrough_thickness;
+        long m_overline_position;
+        long m_overline_thickness;
+        long m_regex_underline_position;
+        long m_regex_underline_thickness;
 
         /* Style stuff */
         GtkBorder m_padding;
@@ -540,9 +635,17 @@ public:
 
         /* Hyperlinks */
         gboolean m_allow_hyperlink;
-        hyperlink_idx_t m_hyperlink_hover_idx;
+        vte::base::Ring::hyperlink_idx_t m_hyperlink_hover_idx;
         const char *m_hyperlink_hover_uri; /* data is owned by the ring */
         long m_hyperlink_auto_id;
+
+        /* RingView and friends */
+        vte::base::RingView m_ringview;
+        bool m_enable_bidi{true};
+        bool m_enable_shaping{true};
+
+        /* BiDi parameters outside of ECMA and DEC private modes */
+        guint m_bidi_rtl : 1;
 
 public:
 
@@ -565,11 +668,15 @@ public:
         inline vte::view::coord_t row_to_pixel(vte::grid::row_t row) const;
         inline vte::grid::row_t first_displayed_row() const;
         inline vte::grid::row_t last_displayed_row() const;
+        inline bool cursor_is_onscreen() const noexcept;
 
         inline VteRowData *insert_rows (guint cnt);
         VteRowData *ensure_row();
         VteRowData *ensure_cursor();
         void update_insert_delta();
+
+        void set_hard_wrapped(vte::grid::row_t row);
+        void set_soft_wrapped(vte::grid::row_t row);
 
         void cleanup_fragments(long start,
                                long end);
@@ -580,20 +687,24 @@ public:
         void restore_cursor(VteScreen *screen__);
         void save_cursor(VteScreen *screen__);
 
-        bool insert_char(gunichar c,
+        void insert_char(gunichar c,
                          bool insert,
                          bool invalidate_now);
 
-        void invalidate(vte::grid::span const& s, bool block = false);
+        void invalidate_row(vte::grid::row_t row);
+        void invalidate_rows(vte::grid::row_t row_start,
+                             vte::grid::row_t row_end /* inclusive */);
+        void invalidate_row_and_context(vte::grid::row_t row);
+        void invalidate_rows_and_context(vte::grid::row_t row_start,
+                                         vte::grid::row_t row_end /* inclusive */);
+        void invalidate(vte::grid::span const& s);
+        void invalidate_symmetrical_difference(vte::grid::span const& a, vte::grid::span const& b, bool block);
         void invalidate_match_span();
-        void invalidate_cell(vte::grid::column_t column, vte::grid::row_t row);
-        void invalidate_cells(vte::grid::column_t sc, int cc,
-                              vte::grid::row_t sr, int rc);
-        void invalidate_region(vte::grid::column_t sc, vte::grid::column_t ec,
-                               vte::grid::row_t sr, vte::grid::row_t er,
-                               bool block = false);
-        void invalidate_selection();
         void invalidate_all();
+
+        guint8 get_bidi_flags() const noexcept;
+        void apply_bidi_attributes(vte::grid::row_t start, guint8 bidi_flags, guint8 bidi_flags_mask);
+        void maybe_apply_bidi_attributes(guint8 bidi_flags_mask);
 
         void reset_update_rects();
         bool invalidate_dirty_rects_and_process_updates();
@@ -615,6 +726,8 @@ public:
         VteCursorBlinkMode decscusr_cursor_blink();
         VteCursorShape decscusr_cursor_shape();
 
+        void remove_text_blink_timeout();
+
         /* The allocation of the widget */
         cairo_rectangle_int_t m_allocated_rect;
         /* The usable view area. This is the allocation, minus the padding, but
@@ -629,7 +742,7 @@ public:
                                            m_allocated_rect.height - m_padding.top - m_padding.bottom);
         }
 
-        inline bool widget_realized() const { return gtk_widget_get_realized(m_widget); }
+        bool widget_realized() const noexcept;
         inline cairo_rectangle_int_t const& get_allocated_rect() const { return m_allocated_rect; }
         inline vte::view::coord_t get_allocated_width() const { return m_allocated_rect.width; }
         inline vte::view::coord_t get_allocated_height() const { return m_allocated_rect.height; }
@@ -640,18 +753,19 @@ public:
         vte::view::coords view_coords_from_grid_coords(vte::grid::coords const& rowcol) const;
         vte::grid::coords grid_coords_from_view_coords(vte::view::coords const& pos) const;
 
+        vte::grid::halfcoords selection_grid_halfcoords_from_view_coords(vte::view::coords const& pos) const;
         bool view_coords_visible(vte::view::coords const& pos) const;
         bool grid_coords_visible(vte::grid::coords const& rowcol) const;
 
         inline bool grid_coords_in_scrollback(vte::grid::coords const& rowcol) const { return rowcol.row() < m_screen->insert_delta; }
 
+        vte::grid::row_t confine_grid_row(vte::grid::row_t const& row) const;
         vte::grid::coords confine_grid_coords(vte::grid::coords const& rowcol) const;
         vte::grid::coords confined_grid_coords_from_event(GdkEvent const* event) const;
         vte::grid::coords confined_grid_coords_from_view_coords(vte::view::coords const& pos) const;
 
         void confine_coordinates(long *xp,
                                  long *yp);
-
 
         void widget_paste(GdkAtom board);
         void widget_copy(VteSelection sel,
@@ -665,11 +779,9 @@ public:
         void widget_set_hadjustment(GtkAdjustment *adjustment);
         void widget_set_vadjustment(GtkAdjustment *adjustment);
 
-        GdkCursor *widget_cursor_new(GdkCursorType cursor_type) const;
-
+        void widget_constructed();
         void widget_realize();
         void widget_unrealize();
-        void widget_map();
         void widget_unmap();
         void widget_style_updated();
         void widget_focus_in(GdkEventFocus *event);
@@ -680,36 +792,31 @@ public:
         bool widget_button_release(GdkEventButton *event);
         void widget_enter(GdkEventCrossing *event);
         void widget_leave(GdkEventCrossing *event);
-        void widget_visibility_notify(GdkEventVisibility *event);
         void widget_scroll(GdkEventScroll *event);
         bool widget_motion_notify(GdkEventMotion *event);
         void widget_draw(cairo_t *cr);
-        void widget_screen_changed (GdkScreen *previous_screen);
         void widget_get_preferred_width(int *minimum_width,
                                         int *natural_width);
         void widget_get_preferred_height(int *minimum_height,
                                          int *natural_height);
         void widget_size_allocate(GtkAllocation *allocation);
 
-        void widget_settings_notify();
+        void set_blink_settings(bool blink,
+                                int blink_time,
+                                int blink_timeout) noexcept;
 
-        void expand_rectangle(cairo_rectangle_int_t& rect) const;
-        void paint_area(GdkRectangle const* area);
         void paint_cursor();
         void paint_im_preedit_string();
         void draw_cells(struct _vte_draw_text_request *items,
                         gssize n,
-                        guint fore,
-                        guint back,
+                        uint32_t fore,
+                        uint32_t back,
+                        uint32_t deco,
                         bool clear,
                         bool draw_default_bg,
-                        bool bold,
-                        bool italic,
-                        bool underline,
-                        bool strikethrough,
+                        uint32_t attr,
                         bool hyperlink,
                         bool hilite,
-                        bool boxed,
                         int column_width,
                         int row_height);
         void fudge_pango_colors(GSList *attributes,
@@ -728,11 +835,9 @@ public:
                                         int column_width,
                                         int height);
         void draw_rows(VteScreen *screen,
+                       cairo_region_t const* region,
                        vte::grid::row_t start_row,
                        long row_count,
-                       vte::grid::column_t start_column,
-                       long column_count,
-                       gint start_x,
                        gint start_y,
                        gint column_width,
                        gint row_height);
@@ -740,10 +845,6 @@ public:
         bool autoscroll();
         void start_autoscroll();
         void stop_autoscroll();
-
-        void scroll_region (long row,
-                            long count,
-                            long delta);
 
         void connect_pty_read();
         void disconnect_pty_read();
@@ -760,22 +861,23 @@ public:
         bool pty_io_write(GIOChannel *channel,
                           GIOCondition condition);
 
-        void feed_chunks(struct _vte_incoming_chunk *chunks);
         void send_child(char const* data,
                         gssize length,
-                        bool local_echo,
-                        bool newline_stuff);
+                        bool local_echo) noexcept;
         void feed_child_using_modes(char const* data,
                                     gssize length);
 
-        void watch_child (GPid child_pid);
-        void child_watch_done(GPid pid,
+        void watch_child (pid_t child_pid);
+        bool terminate_child () noexcept;
+        void child_watch_done(pid_t pid,
                               int status);
 
         void im_commit(char const* text);
-        void im_preedit_start();
-        void im_preedit_end();
-        void im_preedit_changed();
+        void im_preedit_set_active(bool active) noexcept;
+        void im_preedit_reset() noexcept;
+        void im_preedit_changed(char const* str,
+                                int cursorpos,
+                                PangoAttrList* attrs) noexcept;
         bool im_retrieve_surrounding();
         bool im_delete_surrounding(int offset,
                                    int n_chars);
@@ -813,7 +915,8 @@ public:
                    bool from_api = false);
 
         void feed(char const* data,
-                  gssize length);
+                  gssize length,
+                  bool start_processsing_ = true);
         void feed_child(char const *text,
                         gssize length);
         void feed_child_binary(guint8 const* data,
@@ -825,42 +928,41 @@ public:
                            vte::grid::column_t bcol,
                            vte::grid::row_t brow) const;
 
-        inline bool line_is_wrappable(vte::grid::row_t row) const;
-
         GString* get_text(vte::grid::row_t start_row,
                           vte::grid::column_t start_col,
                           vte::grid::row_t end_row,
                           vte::grid::column_t end_col,
                           bool block,
                           bool wrap,
-                          bool include_trailing_spaces,
                           GArray* attributes = nullptr);
 
         GString* get_text_displayed(bool wrap,
-                                    bool include_trailing_spaces,
                                     GArray* attributes = nullptr);
 
         GString* get_text_displayed_a11y(bool wrap,
-                                         bool include_trailing_spaces,
                                          GArray* attributes = nullptr);
 
         GString* get_selected_text(GArray* attributes = nullptr);
 
+        template<unsigned int redbits, unsigned int greenbits, unsigned int bluebits>
         inline void rgb_from_index(guint index,
                                    vte::color::rgb& color) const;
         inline void determine_colors(VteCellAttr const* attr,
                                      bool selected,
                                      bool cursor,
                                      guint *pfore,
-                                     guint *pback) const;
+                                     guint *pback,
+                                     guint *pdeco) const;
         inline void determine_colors(VteCell const* cell,
                                      bool selected,
                                      guint *pfore,
-                                     guint *pback) const;
+                                     guint *pback,
+                                     guint *pdeco) const;
         inline void determine_cursor_colors(VteCell const* cell,
                                             bool selected,
                                             guint *pfore,
-                                            guint *pback) const;
+                                            guint *pback,
+                                            guint *pdeco) const;
 
         char *cellattr_to_html(VteCellAttr const* attr,
                                char const* text) const;
@@ -869,31 +971,31 @@ public:
         GString* attributes_to_html(GString* text_string,
                                     GArray* attrs);
 
-        void start_selection(long x,
-                             long y,
-                             enum vte_selection_type selection_type);
+        void start_selection(vte::view::coords const& pos,
+                             enum vte_selection_type type);
         bool maybe_end_selection();
-
-        void extend_selection_expand();
-        void extend_selection(long x,
-                              long y,
-                              bool always_grow,
-                              bool force);
 
         void select_all();
         void deselect_all();
 
-        bool cell_is_selected(vte::grid::column_t col,
-                              vte::grid::row_t) const;
+        vte::grid::coords resolve_selection_endpoint(vte::grid::halfcoords const& rowcolhalf, bool after) const;
+        void resolve_selection();
+        void selection_maybe_swap_endpoints(vte::view::coords const& pos);
+        void modify_selection(vte::view::coords const& pos);
+        bool cell_is_selected_log(vte::grid::column_t lcol,
+                                  vte::grid::row_t) const;
+        bool cell_is_selected_vis(vte::grid::column_t vcol,
+                                  vte::grid::row_t) const;
 
         void reset_default_attributes(bool reset_hyperlink);
 
         void ensure_font();
         void update_font();
-        void apply_font_metrics(int width,
-                                int height,
-                                int ascent,
-                                int descent);
+        void apply_font_metrics(int cell_width,
+                                int cell_height,
+                                int char_ascent,
+                                int char_descent,
+                                GtkBorder char_spacing);
 
         void refresh_size();
         void screen_set_size(VteScreen *screen_,
@@ -956,24 +1058,14 @@ public:
         void emit_paste_clipboard();
         void emit_hyperlink_hover_uri_changed(const GdkRectangle *bbox);
 
-        void clear_tabstop(int column); // FIXMEchpe vte::grid::column_t ?
-        bool get_tabstop(int column);
-        void set_tabstop(int column);
-        void set_default_tabstops();
-
-        void hyperlink_invalidate_and_get_bbox(hyperlink_idx_t idx, GdkRectangle *bbox);
-        void hyperlink_hilite_update(vte::view::coords const& pos);
-        void hyperlink_hilite(vte::view::coords const& pos);
+        void hyperlink_invalidate_and_get_bbox(vte::base::Ring::hyperlink_idx_t idx, GdkRectangle *bbox);
+        void hyperlink_hilite_update();
 
         void match_contents_clear();
         void match_contents_refresh();
         void set_cursor_from_regex_match(struct vte_match_regex *regex);
         void match_hilite_clear();
-        bool cursor_inside_match(vte::view::coords const& pos);
-        void match_hilite_show(vte::view::coords const& pos);
-        void match_hilite_hide();
-        void match_hilite_update(vte::view::coords const& pos);
-        void match_hilite(vte::view::coords const& pos);
+        void match_hilite_update();
 
         bool rowcol_from_event(GdkEvent *event,
                                long *column,
@@ -1067,11 +1159,10 @@ public:
                       long rows);
 
         bool process_word_char_exceptions(char const *str,
-                                          gunichar **arrayp,
-                                          gsize *lenp);
+                                          std::u32string& array) const noexcept;
 
-        long get_char_height() { ensure_font(); return m_char_height; }
-        long get_char_width()  { ensure_font(); return m_char_width;  }
+        long get_cell_height() { ensure_font(); return m_cell_height; }
+        long get_cell_width()  { ensure_font(); return m_cell_width;  }
 
         vte::color::rgb const* get_color(int entry) const;
         void set_color(int entry,
@@ -1081,10 +1172,14 @@ public:
                          int source);
 
         bool set_audible_bell(bool setting);
+        bool set_text_blink_mode(VteTextBlinkMode setting);
         bool set_allow_bold(bool setting);
         bool set_allow_hyperlink(bool setting);
         bool set_backspace_binding(VteEraseBinding binding);
         bool set_background_alpha(double alpha);
+        bool set_bold_is_bright(bool setting);
+        bool set_cell_height_scale(double scale);
+        bool set_cell_width_scale(double scale);
         bool set_cjk_ambiguous_width(int width);
         void set_color_background(vte::color::rgb const &color);
         void set_color_bold(vte::color::rgb const& color);
@@ -1107,63 +1202,69 @@ public:
         bool set_cursor_shape(VteCursorShape shape);
         bool set_cursor_style(VteCursorStyle style);
         bool set_delete_binding(VteEraseBinding binding);
+        bool set_enable_bidi(bool setting);
+        bool set_enable_shaping(bool setting);
         bool set_encoding(char const* codeset);
         bool set_font_desc(PangoFontDescription const* desc);
         bool set_font_scale(double scale);
         bool set_freezed_image_limit(gulong limit);
         bool set_input_enabled(bool enabled);
         bool set_mouse_autohide(bool autohide);
-        bool set_pty(VtePty *pty);
+        bool set_pty(VtePty *pty,
+                     bool proces_remaining = true);
         bool set_rewrap_on_resize(bool rewrap);
         bool set_scrollback_lines(long lines);
         bool set_scroll_on_keystroke(bool scroll);
         bool set_scroll_on_output(bool scroll);
         bool set_sixel_enabled(gboolean enabled);
         bool set_word_char_exceptions(char const* exceptions);
+        void set_clear_background(bool setting);
 
         bool write_contents_sync (GOutputStream *stream,
                                   VteWriteFlags flags,
                                   GCancellable *cancellable,
                                   GError **error);
 
-        /* Sequence handlers and their helper functions */
-        void handle_sequence(char const* match,
-                             GValueArray *params);
-        char* ucs4_to_utf8(guchar const* in);
-
         inline void ensure_cursor_is_onscreen();
-        inline void seq_home_cursor();
-        inline void seq_clear_screen();
-        inline void seq_clear_current_line();
-        inline void seq_clear_above_current();
-        inline void seq_scroll_text(vte::grid::row_t scroll_amount);
-        inline void seq_switch_screen(VteScreen *new_screen);
-        inline void seq_normal_screen();
-        inline void seq_alternate_screen();
-        inline void seq_save_cursor();
-        inline void seq_restore_cursor();
-        inline void seq_normal_screen_and_restore_cursor();
-        inline void seq_save_cursor_and_alternate_screen();
-        void seq_set_title_internal(GValueArray *params,
-                                    bool icon_title,
-                                    bool window_title);
-        inline void seq_set_mode_internal(long setting,
-                                          bool value);
-        inline void set_mouse_smooth_scroll_delta(double value);
-        inline void seq_decset_internal_post(long setting,
-                                             bool set);
+        inline void home_cursor();
+        inline void clear_screen();
+        inline void clear_current_line();
+        inline void clear_above_current();
+        inline void scroll_text(vte::grid::row_t scroll_amount);
+        inline void switch_screen(VteScreen *new_screen);
+        inline void switch_normal_screen();
+        inline void switch_alternate_screen();
+        inline void save_cursor();
+        inline void restore_cursor();
+
+        inline void set_mode_ecma(vte::parser::Sequence const& seq,
+                                  bool set) noexcept;
+        inline void set_mode_private(vte::parser::Sequence const& seq,
+                                     bool set) noexcept;
+        inline void set_mode_private(int mode,
+                                     bool set) noexcept;
+        inline void save_mode_private(vte::parser::Sequence const& seq,
+                                      bool save) noexcept;
+        void update_mouse_protocol() noexcept;
+
         inline void set_character_replacements(unsigned slot,
                                                VteCharacterReplacement replacement);
         inline void set_character_replacement(unsigned slot);
-        inline void seq_cursor_back_tab();
-        inline void seq_cb();
-        inline void seq_cd();
-        inline void seq_ce();
-        inline void seq_dc();
+        inline void clear_to_bol();
+        inline void clear_below_current();
+        inline void clear_to_eol();
+        inline void delete_character();
         inline void set_cursor_column(vte::grid::column_t col);
+        inline void set_cursor_column1(vte::grid::column_t col); /* 1-based */
+        inline int get_cursor_column() const noexcept { return CLAMP(m_screen->cursor.col, 0, m_column_count - 1); }
+        inline int get_cursor_column1() const noexcept { return get_cursor_column() + 1; }
         inline void set_cursor_row(vte::grid::row_t row /* relative to scrolling region */);
+        inline void set_cursor_row1(vte::grid::row_t row /* relative to scrolling region */); /* 1-based */
+        inline int get_cursor_row() const noexcept { return CLAMP(m_screen->cursor.row, 0, m_row_count - 1); }
+        inline int get_cursor_row1() const noexcept { return get_cursor_row() + 1; }
         inline void set_cursor_coords(vte::grid::row_t row /* relative to scrolling region */,
                                       vte::grid::column_t column);
+<<<<<<< HEAD
         inline vte::grid::row_t get_cursor_row() const;
         inline vte::grid::column_t get_cursor_column() const;
         inline void reset_scrolling_region();
@@ -1203,6 +1304,37 @@ public:
                                                       int osc,
                                                       char const *terminator);
         void seq_load_sixel(char const* p);
+=======
+        inline void set_cursor_coords1(vte::grid::row_t row /* relative to scrolling region */,
+                                       vte::grid::column_t column); /* 1-based */
+        inline vte::grid::row_t get_cursor_row_unclamped() const;
+        inline vte::grid::column_t get_cursor_column_unclamped() const;
+        inline void move_cursor_up(vte::grid::row_t rows);
+        inline void move_cursor_down(vte::grid::row_t rows);
+        inline void erase_characters(long count);
+        inline void insert_blank_character();
+
+        template<unsigned int redbits, unsigned int greenbits, unsigned int bluebits>
+        inline bool seq_parse_sgr_color(vte::parser::Sequence const& seq,
+                                        unsigned int& idx,
+                                        uint32_t& color) const noexcept;
+
+        inline void move_cursor_backward(vte::grid::column_t columns);
+        inline void move_cursor_forward(vte::grid::column_t columns);
+        inline void move_cursor_tab_backward(int count = 1);
+        inline void move_cursor_tab_forward(int count = 1);
+        inline void line_feed();
+        inline void erase_in_display(vte::parser::Sequence const& seq);
+        inline void erase_in_line(vte::parser::Sequence const& seq);
+        inline void insert_lines(vte::grid::row_t param);
+        inline void delete_lines(vte::grid::row_t param);
+
+        unsigned int checksum_area(vte::grid::row_t start_row,
+                                   vte::grid::column_t start_col,
+                                   vte::grid::row_t end_row,
+                                   vte::grid::column_t end_col);
+
+>>>>>>> origin/vte-0-58
         void subscribe_accessible_events();
         void select_text(vte::grid::column_t start_col,
                          vte::grid::row_t start_row,
@@ -1211,15 +1343,96 @@ public:
         void select_empty(vte::grid::column_t col,
                           vte::grid::row_t row);
 
+<<<<<<< HEAD
 private:
         void freeze_hidden_images_before_view_area(double start_pos, double end_pos);
         void freeze_hidden_images_after_view_area(double start_pos, double end_pos);
         void maybe_remove_images();
+=======
+        void send(vte::parser::u8SequenceBuilder const& builder,
+                  bool c1 = true,
+                  vte::parser::u8SequenceBuilder::Introducer introducer = vte::parser::u8SequenceBuilder::Introducer::DEFAULT,
+                  vte::parser::u8SequenceBuilder::ST st = vte::parser::u8SequenceBuilder::ST::DEFAULT) noexcept;
+        void send(vte::parser::Sequence const& seq,
+                  vte::parser::u8SequenceBuilder const& builder) noexcept;
+        void send(unsigned int type,
+                  std::initializer_list<int> params) noexcept;
+        void reply(vte::parser::Sequence const& seq,
+                   unsigned int type,
+                   std::initializer_list<int> params) noexcept;
+        void reply(vte::parser::Sequence const& seq,
+                   unsigned int type,
+                   std::initializer_list<int> params,
+                   vte::parser::ReplyBuilder const& builder) noexcept;
+        #if 0
+        void reply(vte::parser::Sequence const& seq,
+                   unsigned int type,
+                   std::initializer_list<int> params,
+                   std::string const& str) noexcept;
+        #endif
+        void reply(vte::parser::Sequence const& seq,
+                   unsigned int type,
+                   std::initializer_list<int> params,
+                   char const* format,
+                   ...) noexcept G_GNUC_PRINTF(5, 6);
+
+        /* OSC handler helpers */
+        bool get_osc_color_index(int osc,
+                                 int value,
+                                 int& index) const noexcept;
+        void set_color_index(vte::parser::Sequence const& seq,
+                             vte::parser::StringTokeniser::const_iterator& token,
+                             vte::parser::StringTokeniser::const_iterator const& endtoken,
+                             int number,
+                             int index,
+                             int index_fallback,
+                             int osc) noexcept;
+
+        /* OSC handlers */
+        void set_color(vte::parser::Sequence const& seq,
+                       vte::parser::StringTokeniser::const_iterator& token,
+                       vte::parser::StringTokeniser::const_iterator const& endtoken,
+                       int osc) noexcept;
+        void set_special_color(vte::parser::Sequence const& seq,
+                               vte::parser::StringTokeniser::const_iterator& token,
+                               vte::parser::StringTokeniser::const_iterator const& endtoken,
+                               int index,
+                               int index_fallback,
+                               int osc) noexcept;
+        void reset_color(vte::parser::Sequence const& seq,
+                         vte::parser::StringTokeniser::const_iterator& token,
+                         vte::parser::StringTokeniser::const_iterator const& endtoken,
+                         int osc) noexcept;
+        void set_current_directory_uri(vte::parser::Sequence const& seq,
+                                       vte::parser::StringTokeniser::const_iterator& token,
+                                       vte::parser::StringTokeniser::const_iterator const& endtoken) noexcept;
+        void set_current_file_uri(vte::parser::Sequence const& seq,
+                                  vte::parser::StringTokeniser::const_iterator& token,
+                                  vte::parser::StringTokeniser::const_iterator const& endtoken) noexcept;
+        void set_current_hyperlink(vte::parser::Sequence const& seq,
+                                   vte::parser::StringTokeniser::const_iterator& token,
+                                   vte::parser::StringTokeniser::const_iterator const& endtoken) noexcept;
+
+        void ringview_update();
+
+        /* Sequence handlers */
+        bool m_line_wrapped; // signals line wrapped from character insertion
+        // Note: inlining the handlers seems to worsen the performance, so we don't do that
+#define _VTE_CMD(cmd) \
+	/* inline */ void cmd (vte::parser::Sequence const& seq);
+#define _VTE_NOP(cmd) G_GNUC_UNUSED _VTE_CMD(cmd)
+#include "parser-cmd.hh"
+#undef _VTE_CMD
+#undef _VTE_NOP
+>>>>>>> origin/vte-0-58
 };
+
+} // namespace terminal
+} // namespace vte
 
 extern GTimer *process_timer;
 
-VteTerminalPrivate *_vte_terminal_get_impl(VteTerminal *terminal);
+vte::terminal::Terminal* _vte_terminal_get_impl(VteTerminal *terminal);
 
 static inline bool
 _vte_double_equal(double a,
@@ -1230,3 +1443,7 @@ _vte_double_equal(double a,
         return a == b;
 #pragma GCC diagnostic pop
 }
+
+#define VTE_TEST_FLAG_DECRQCRA (G_GUINT64_CONSTANT(1) << 0)
+
+extern uint64_t g_test_flags;

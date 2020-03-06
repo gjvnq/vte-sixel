@@ -31,7 +31,7 @@
 #endif
 #include <unistd.h>
 #include <glib.h>
-#include "caps.h"
+#include "caps.hh"
 
 #ifdef HAVE_SYS_SELECT_H
 #include <sys/select.h>
@@ -336,8 +336,8 @@ parse(void)
                                 i += consumed;
                                 break;
                         }
-                        /* else fall-trough */
                 }
+                        /* fallthrough */
 		default:
                         i += print_data(&bytes->data[i], bytes->len - i);
 			fprintf(stdout, "\r\n");
@@ -352,6 +352,7 @@ parse(void)
 
 static struct termios tcattr, original;
 
+G_GNUC_NORETURN
 static void
 sigint_handler(int signum)
 {

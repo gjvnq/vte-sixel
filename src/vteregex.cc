@@ -104,8 +104,13 @@ set_gerror_from_pcre_error(int errcode,
         return FALSE;
 }
 
+#pragma GCC diagnostic push
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic ignored "-Wcast-function-type"
+#endif
 G_DEFINE_BOXED_TYPE(VteRegex, vte_regex,
                     vte_regex_ref, (GBoxedFreeFunc)vte_regex_unref)
+#pragma GCC diagnostic pop
 
 G_DEFINE_QUARK(vte-regex-error, vte_regex_error)
 
@@ -128,7 +133,7 @@ vte_regex_ref(VteRegex *regex)
 }
 
 /**
- * vte_regex_ref:
+ * vte_regex_unref:
  * @regex: (transfer full): a #VteRegex
  *
  * Decreases the reference count of @regex by one, and frees @regex
@@ -147,6 +152,36 @@ vte_regex_unref(VteRegex *regex)
         return NULL;
 }
 
+static gboolean
+check_pcre_config_unicode(GError** error)
+{
+        /* Check library compatibility */
+        guint32 v;
+        int r = pcre2_config_8(PCRE2_CONFIG_UNICODE, &v);
+        if (r != 0 || v != 1) {
+                g_set_error(error, VTE_REGEX_ERROR, VTE_REGEX_ERROR_INCOMPATIBLE,
+                            "PCRE2 library was built without unicode support");
+                return FALSE;
+        }
+
+        return TRUE;
+}
+
+static gboolean
+check_pcre_config_jit(void)
+{
+        static gboolean warned = FALSE;
+
+        char s[256];
+        int r = pcre2_config_8(PCRE2_CONFIG_JITTARGET, &s);
+        if (r == PCRE2_ERROR_BADOPTION && !warned) {
+                g_printerr("PCRE2 library was built without JIT support\n");
+                warned = TRUE;
+        }
+
+        return r >= 1;
+}
+
 static VteRegex *
 vte_regex_new(VteRegexPurpose purpose,
               const char *pattern,
@@ -155,21 +190,15 @@ vte_regex_new(VteRegexPurpose purpose,
               GError    **error)
 {
         pcre2_code_8 *code;
-        int r, errcode;
-        guint32 v;
+        int errcode;
         PCRE2_SIZE erroffset;
 
         g_return_val_if_fail(pattern != NULL, NULL);
         g_return_val_if_fail(pattern_length >= -1, NULL);
         g_return_val_if_fail(error == NULL || *error == NULL, NULL);
 
-        /* Check library compatibility */
-        r = pcre2_config_8(PCRE2_CONFIG_UNICODE, &v);
-        if (r != 0 || v != 1) {
-                g_set_error(error, VTE_REGEX_ERROR, VTE_REGEX_ERROR_INCOMPATIBLE,
-                            "PCRE2 library was built without unicode support");
-                return NULL;
-        }
+        if (!check_pcre_config_unicode(error))
+                return FALSE;
 
         code = pcre2_compile_8((PCRE2_SPTR8)pattern,
                                pattern_length >= 0 ? pattern_length : PCRE2_ZERO_TERMINATED,
@@ -357,7 +386,7 @@ _vte_regex_has_purpose(VteRegex *regex,
  * Returns: the #pcre2_code_8 from @regex
  */
 const pcre2_code_8 *
-_vte_regex_get_pcre(VteRegex *regex)
+_vte_regex_get_pcre(VteRegex const* regex)
 {
         g_return_val_if_fail(regex != NULL, NULL);
 
@@ -370,7 +399,8 @@ _vte_regex_get_pcre(VteRegex *regex)
  *
  * If the platform supports JITing, JIT compiles @regex.
  *
- * Returns: %TRUE if JITing succeeded, or %FALSE with @error filled in
+ * Returns: %TRUE if JITing succeeded (or PCRE2 was built without
+ *   JIT support), or %FALSE with @error filled in
  */
 gboolean
 vte_regex_jit(VteRegex *regex,
@@ -380,6 +410,9 @@ vte_regex_jit(VteRegex *regex,
         int r;
 
         g_return_val_if_fail(regex != NULL, FALSE);
+
+        if (!check_pcre_config_jit())
+                return TRUE;
 
         r = pcre2_jit_compile_8(regex->code, flags);
         if (r < 0)
@@ -423,4 +456,69 @@ _vte_regex_get_compile_flags(VteRegex *regex)
         int r = pcre2_pattern_info_8(regex->code, PCRE2_INFO_ARGOPTIONS, &v);
 
         return r == 0 ? v : 0u;
+}
+
+/**
+ * vte_regex_substitute:
+ * @regex: a #VteRegex
+ * @subject: the subject string
+ * @replacement: the replacement string
+ * @flags: PCRE2 match flags
+ * @error: (nullable): return location for a #GError, or %NULL
+ *
+ * See man:pcre2api(3) on pcre2_substitute() for more information.
+ *
+ * Returns: (transfer full): the substituted string, or %NULL
+ *   if an error occurred
+ *
+ * Since: 0.56
+ */
+char *
+vte_regex_substitute(VteRegex *regex,
+                     const char *subject,
+                     const char *replacement,
+                     guint32 flags,
+                     GError **error)
+{
+        g_return_val_if_fail(regex != nullptr, nullptr);
+        g_return_val_if_fail(subject != nullptr, nullptr);
+        g_return_val_if_fail(replacement != nullptr, nullptr);
+        g_return_val_if_fail (!(flags & PCRE2_SUBSTITUTE_OVERFLOW_LENGTH), nullptr);
+
+        uint8_t outbuf[2048];
+        PCRE2_SIZE outlen = sizeof(outbuf);
+        int r = pcre2_substitute_8(_vte_regex_get_pcre(regex),
+                                   (PCRE2_SPTR8)subject, PCRE2_ZERO_TERMINATED,
+                                   0 /* start offset */,
+                                   flags | PCRE2_SUBSTITUTE_OVERFLOW_LENGTH,
+                                   nullptr /* match data */,
+                                   nullptr /* match context */,
+                                   (PCRE2_SPTR8)replacement, PCRE2_ZERO_TERMINATED,
+                                   (PCRE2_UCHAR8*)outbuf, &outlen);
+
+        if (r >= 0)
+                return g_strndup((char*)outbuf, outlen);
+
+        if (r == PCRE2_ERROR_NOMEMORY) {
+                /* The buffer was not large enough; allocated a buffer of the
+                 * required size and try again. Note that @outlen as returned
+                 * from pcre2_substitute_8() above includes the trailing \0.
+                 */
+                uint8_t *outbuf2 = (uint8_t*)g_malloc(outlen);
+                r = pcre2_substitute_8(_vte_regex_get_pcre(regex),
+                                       (PCRE2_SPTR8)subject, PCRE2_ZERO_TERMINATED,
+                                       0 /* start offset */,
+                                       flags | PCRE2_SUBSTITUTE_OVERFLOW_LENGTH,
+                                       nullptr /* match data */,
+                                       nullptr /* match context */,
+                                       (PCRE2_SPTR8)replacement, PCRE2_ZERO_TERMINATED,
+                                       (PCRE2_UCHAR8*)outbuf2, &outlen);
+                if (r >= 0)
+                        return (char*)outbuf2;
+
+                g_free(outbuf2);
+       }
+
+        set_gerror_from_pcre_error(r, error);
+        return nullptr;
 }

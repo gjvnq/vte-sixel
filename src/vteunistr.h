@@ -57,8 +57,34 @@ typedef guint32 vteunistr;
 vteunistr
 _vte_unistr_append_unichar (vteunistr s, gunichar c);
 
+/**
+ * _vte_unistr_append_unistr:
+ * @s: a #vteunistr
+ * @t: another #vteunistr to append to @s
+ *
+ * Creates a vteunistr value for the string @s followed by the
+ * string @t.
+ *
+ * Returns: the new #vteunistr value
+ **/
+vteunistr
+_vte_unistr_append_unistr (vteunistr s, vteunistr t);
+
 gunichar
 _vte_unistr_get_base (vteunistr s);
+
+/**
+ * _vte_unistr_append_to_string:
+ * @s: a #vteunistr
+ * @c: Unicode character to replace the base character of @s.
+ *
+ * Creates a vteunistr value where the base character from @s is
+ * replaced by @c, while the combining characters from @s are carried over.
+ *
+ * Returns: the new #vteunistr value
+ */
+vteunistr
+_vte_unistr_replace_base (vteunistr s, gunichar c);
 
 /**
  * _vte_unistr_append_to_string:
@@ -70,6 +96,16 @@ _vte_unistr_get_base (vteunistr s);
  **/
 void
 _vte_unistr_append_to_string (vteunistr s, GString *gs);
+
+/**
+ * _vte_unistr_append_to_gunichars:
+ * @s: a #vteunistr
+ * @a: a #GArray of #gunichar items to append @s to
+ *
+ * Appends @s to @a.
+ **/
+void
+_vte_unistr_append_to_gunichars (vteunistr s, GArray *a);
 
 /**
  * _vte_unistr_strlen:

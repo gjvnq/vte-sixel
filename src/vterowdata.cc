@@ -21,10 +21,20 @@
 #include <config.h>
 
 #include "debug.h"
-#include "vterowdata.h"
+#include "vterowdata.hh"
 
 #include <string.h>
 
+#include <type_traits>
+
+/* This will be true now that VteCell is POD, but make sure it'll be true
+ * once that changes.
+ */
+static_assert(std::is_trivially_copy_constructible<VteCell>::value, "VteCell is not copy constructible");
+static_assert(std::is_trivially_move_constructible<VteCell>::value, "VteCell is not move constructible");
+static_assert(std::is_trivially_copyable<VteCell>::value, "VteCell is not trivially copyable");
+static_assert(std::is_trivially_copy_assignable<VteCell>::value, "VteCell is not copy assignable");
+static_assert(std::is_trivially_move_assignable<VteCell>::value, "VteCell is not move assignable");
 
 /*
  * VteCells: A row's cell array
@@ -160,5 +170,26 @@ void _vte_row_data_shrink (VteRowData *row, gulong max_len)
 {
 	if (max_len < row->len)
 		row->len = max_len;
+}
+
+void _vte_row_data_copy (const VteRowData *src, VteRowData *dst)
+{
+        _vte_row_data_ensure (dst, src->len);
+        dst->len = src->len;
+        dst->attr = src->attr;
+        memcpy(dst->cells, src->cells, src->len * sizeof (src->cells[0]));
+}
+
+/* Get the length, ignoring trailing empty cells (with a custom background color). */
+guint16 _vte_row_data_nonempty_length (const VteRowData *row)
+{
+        guint16 len;
+        const VteCell *cell;
+        for (len = row->len; len > 0; len--) {
+                cell = &row->cells[len - 1];
+                if (cell->attr.fragment() || cell->c != 0)
+                        break;
+        }
+        return len;
 }
 

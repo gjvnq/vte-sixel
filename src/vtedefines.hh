@@ -24,7 +24,7 @@
 #define VTE_COLUMNS			80
 
 /*
- * Colors are encoded in 25 bits as follows:
+ * R8G8B8 colors are encoded in 25 bits as follows:
  *
  * 0 .. 255:
  *   Colors set by SGR 256-color extension (38/48;5;index).
@@ -45,14 +45,25 @@
  * VTE_RGB_COLOR (2^24) .. VTE_RGB_COLOR + 16Mi - 1 (2^25 - 1):
  *   Colors set by SGR truecolor extension (38/48;2;red;green;blue)
  *   These are direct RGB values.
+ *
+ * R4G5B4-bit-per-component colours are encoded the same, except for
+ * direct colours which are reduced to 13-bit colours and stored as
+ * direct values with bit 1 << 13 set.
  */
-#define VTE_LEGACY_COLORS_OFFSET	512
+
+#define VTE_LEGACY_COLORS_OFFSET	(1U << 9)
 #define VTE_LEGACY_COLOR_SET_SIZE	8
 #define VTE_LEGACY_FULL_COLOR_SET_SIZE	16
 #define VTE_COLOR_PLAIN_OFFSET		0
 #define VTE_COLOR_BRIGHT_OFFSET		8
-#define VTE_DIM_COLOR			(1 << 10)
-#define VTE_RGB_COLOR			(1 << 24)
+#define VTE_DIM_COLOR                   (1U << 10)
+#define VTE_RGB_COLOR_MASK(rb,gb,bb)    (1U << ((rb) + (gb) + (bb)))
+#define VTE_RGB_COLOR(bb,gb,rb,r,g,b)   (VTE_RGB_COLOR_MASK(rb,gb,bb) |   \
+                                         ((((r) >> (8 - (rb))) & ((1U << (rb)) -  1U)) << ((gb) + (bb))) | \
+                                         ((((g) >> (8 - (gb))) & ((1U << (gb)) -  1U)) << (bb)) | \
+                                         (((b) >> (8 - (bb))) & ((1U << (bb)) -  1U)))
+#define VTE_RGB_COLOR_GET_COMPONENT(packed,shift,bits) \
+        ((((packed) >> (shift)) & ((1U << (bits)) - 1U)) << (8 - bits) | ((1U << (8 - bits)) >> 1))
 
 #define VTE_DEFAULT_FG			256
 #define VTE_DEFAULT_BG			257
@@ -68,18 +79,9 @@
 #define VTE_MOUSING_CURSOR		GDK_LEFT_PTR
 #define VTE_HYPERLINK_CURSOR		GDK_HAND2
 #define VTE_HYPERLINK_CURSOR_DEBUG	GDK_SPIDER
-#define VTE_TAB_MAX			999
-#define VTE_ADJUSTMENT_PRIORITY		G_PRIORITY_DEFAULT_IDLE
-#define VTE_INPUT_RETRY_PRIORITY	G_PRIORITY_HIGH
-#define VTE_INPUT_PRIORITY		G_PRIORITY_DEFAULT_IDLE
 #define VTE_CHILD_INPUT_PRIORITY	G_PRIORITY_DEFAULT_IDLE
 #define VTE_CHILD_OUTPUT_PRIORITY	G_PRIORITY_HIGH
-#define VTE_FX_PRIORITY			G_PRIORITY_DEFAULT_IDLE
-#define VTE_REGCOMP_FLAGS		REG_EXTENDED
-#define VTE_REGEXEC_FLAGS		0
-#define VTE_INPUT_CHUNK_SIZE		0x2000
 #define VTE_MAX_INPUT_READ		0x1000
-#define VTE_INVALID_BYTE		'?'
 #define VTE_DISPLAY_TIMEOUT		10
 #define VTE_UPDATE_TIMEOUT		15
 #define VTE_UPDATE_REPEAT_TIMEOUT	30
@@ -88,7 +90,7 @@
 #define VTE_DEFAULT_UTF8_AMBIGUOUS_WIDTH 1
 #define VTE_DEFAULT_FREEZED_IMAGE_LIMIT (16 * 1024 * 1024)  /* 16 MB */
 
-#define VTE_UTF8_BPC                    (6) /* Maximum number of bytes used per UTF-8 character */
+#define VTE_UTF8_BPC                    (4) /* Maximum number of bytes used per UTF-8 character */
 
 /* Keep in decreasing order of precedence. */
 #define VTE_COLOR_SOURCE_ESCAPE 0
@@ -96,6 +98,11 @@
 
 #define VTE_FONT_SCALE_MIN (.25)
 #define VTE_FONT_SCALE_MAX (4.)
+#define VTE_CELL_SCALE_MIN (1.)
+#define VTE_CELL_SCALE_MAX (2.)
+
+/* Minimum time between two beeps (µs) */
+#define VTE_BELL_MINIMUM_TIME_DIFFERENCE (100000)
 
 /* Maximum length of a URI in the OSC 8 escape sequences. There's no de jure limit,
  * 2000-ish the de facto standard, and Internet Explorer supports 2083.
@@ -124,3 +131,12 @@
  * Currently the hyperlink data is the ID and URI and a separator in between.
  * Make sure there are enough bits to store this in VteStreamCellAttr.hyperlink_length */
 #define VTE_HYPERLINK_TOTAL_LENGTH_MAX  (VTE_HYPERLINK_ID_LENGTH_MAX + 1 + VTE_HYPERLINK_URI_LENGTH_MAX)
+
+/* Max length of title */
+#define VTE_WINDOW_TITLE_MAX_LENGTH (1024)
+
+/* Max depth of title stack */
+#define VTE_WINDOW_TITLE_STACK_MAX_DEPTH (8)
+
+/* Maximum length of a paragraph, in lines, that might get proper RingView (BiDi) treatment. */
+#define VTE_RINGVIEW_PARAGRAPH_LENGTH_MAX   500

@@ -48,6 +48,12 @@ void vte_terminal_match_set_cursor(VteTerminal *terminal,
 
 _VTE_DEPRECATED
 _VTE_PUBLIC
+void vte_terminal_match_set_cursor_type(VteTerminal *terminal,
+					int tag,
+                                        GdkCursorType cursor_type) _VTE_GNUC_NONNULL(1);
+
+_VTE_DEPRECATED
+_VTE_PUBLIC
 char *vte_terminal_match_check(VteTerminal *terminal,
 			       glong column, glong row,
 			       int *tag) _VTE_GNUC_NONNULL(1) G_GNUC_MALLOC;
@@ -92,6 +98,47 @@ void vte_pty_close (VtePty *pty) _VTE_GNUC_NONNULL(1);
 _VTE_DEPRECATED
 _VTE_PUBLIC
 void vte_terminal_copy_clipboard(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
+
+_VTE_DEPRECATED
+_VTE_PUBLIC
+void vte_terminal_get_geometry_hints(VteTerminal *terminal,
+                                     GdkGeometry *hints,
+                                     int min_rows,
+                                     int min_columns) _VTE_GNUC_NONNULL(1) _VTE_GNUC_NONNULL(2);
+
+_VTE_DEPRECATED
+_VTE_PUBLIC
+void vte_terminal_set_geometry_hints_for_window(VteTerminal *terminal,
+                                                GtkWindow *window) _VTE_GNUC_NONNULL(1) _VTE_GNUC_NONNULL(2);
+
+_VTE_DEPRECATED
+_VTE_PUBLIC
+const char *vte_terminal_get_icon_title(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
+
+_VTE_DEPRECATED
+_VTE_PUBLIC
+gboolean vte_terminal_set_encoding(VteTerminal *terminal,
+                                   const char *codeset,
+                                   GError **error) _VTE_GNUC_NONNULL(1);
+
+_VTE_DEPRECATED
+_VTE_PUBLIC
+const char *vte_terminal_get_encoding(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
+
+_VTE_DEPRECATED
+_VTE_PUBLIC
+char *vte_terminal_get_text_include_trailing_spaces(VteTerminal *terminal,
+						    VteSelectionFunc is_selected,
+						    gpointer user_data,
+						    GArray *attributes) _VTE_GNUC_NONNULL(1) G_GNUC_MALLOC;
+
+_VTE_DEPRECATED
+_VTE_PUBLIC
+void vte_terminal_set_rewrap_on_resize(VteTerminal *terminal,
+                                       gboolean rewrap) _VTE_GNUC_NONNULL(1);
+_VTE_DEPRECATED
+_VTE_PUBLIC
+gboolean vte_terminal_get_rewrap_on_resize(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
 
 G_END_DECLS
 

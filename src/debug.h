@@ -22,7 +22,7 @@
 #define vte_debug_h_included
 
 #include <config.h>
-
+#include <stdint.h>
 #include <glib.h>
 
 #ifndef VTE_COMPILATION
@@ -38,7 +38,7 @@ G_BEGIN_DECLS
 
 typedef enum {
 	VTE_DEBUG_MISC		= 1 << 0,
-	VTE_DEBUG_PARSE		= 1 << 1,
+	VTE_DEBUG_PARSER	= 1 << 1,
 	VTE_DEBUG_IO		= 1 << 2,
 	VTE_DEBUG_UPDATES	= 1 << 3,
 	VTE_DEBUG_EVENTS	= 1 << 4,
@@ -50,6 +50,7 @@ typedef enum {
 	VTE_DEBUG_CURSOR	= 1 << 10,
 	VTE_DEBUG_KEYBOARD	= 1 << 11,
 	VTE_DEBUG_LIFECYCLE	= 1 << 12,
+<<<<<<< HEAD
 	VTE_DEBUG_MATCHER	= 1 << 13,
 	VTE_DEBUG_WORK		= 1 << 14,
 	VTE_DEBUG_CELLS		= 1 << 15,
@@ -64,10 +65,33 @@ typedef enum {
         VTE_DEBUG_REGEX         = 1 << 24,
         VTE_DEBUG_HYPERLINK     = 1 << 25,
         VTE_DEBUG_IMAGE         = 1 << 26,
+=======
+	VTE_DEBUG_WORK		= 1 << 13,
+	VTE_DEBUG_CELLS		= 1 << 14,
+	VTE_DEBUG_TIMEOUT	= 1 << 15,
+	VTE_DEBUG_DRAW		= 1 << 16,
+	VTE_DEBUG_ALLY		= 1 << 17,
+	VTE_DEBUG_ADJ		= 1 << 18,
+	VTE_DEBUG_PANGOCAIRO    = 1 << 19,
+	VTE_DEBUG_WIDGET_SIZE   = 1 << 20,
+        VTE_DEBUG_STYLE         = 1 << 21,
+	VTE_DEBUG_RESIZE        = 1 << 22,
+        VTE_DEBUG_REGEX         = 1 << 23,
+        VTE_DEBUG_HYPERLINK     = 1 << 24,
+        VTE_DEBUG_MODES         = 1 << 25,
+        VTE_DEBUG_EMULATION     = 1 << 26,
+        VTE_DEBUG_RINGVIEW      = 1 << 27,
+        VTE_DEBUG_BIDI          = 1 << 28,
+>>>>>>> origin/vte-0-58
 } VteDebugFlags;
 
 void _vte_debug_init(void);
-const char *_vte_debug_sequence_to_string(const char *str);
+const char *_vte_debug_sequence_to_string(const char *str,
+                                          gssize length);
+
+void _vte_debug_hexdump(char const* str,
+                        uint8_t const* buf,
+                        size_t len);
 
 extern guint _vte_debug_flags;
 static inline gboolean _vte_debug_on(guint flags) G_GNUC_CONST G_GNUC_UNUSED;
@@ -90,7 +114,6 @@ _vte_debug_on(guint flags)
 	G_STMT_START { _VTE_DEBUG_IF(flags) g_printerr(fmt, ##__VA_ARGS__); } G_STMT_END
 #else
 #include <stdarg.h>
-#include <glib/gstdio.h>
 static void _vte_debug_print(guint flags, const char *fmt, ...)
 {
 	_VTE_DEBUG_IF(flags) {

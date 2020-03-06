@@ -18,28 +18,30 @@
 
 #include "config.h"
 
+#include <algorithm>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/param.h> /* howmany() */
 
 #include <glib.h>
 #include <gtk/gtk.h>
 
+#include "bidi.hh"
 #include "vtedraw.hh"
 #include "vtedefines.hh"
 #include "debug.h"
 
 #include <pango/pangocairo.h>
 
+/* Have a space between letters to make sure ligatures aren't used when caching the glyphs: bug 793391. */
 #define VTE_DRAW_SINGLE_WIDE_CHARACTERS	\
-					" !\"#$%&'()*+,-./" \
-					"0123456789" \
-					":;<=>?@" \
-					"ABCDEFGHIJKLMNOPQRSTUVWXYZ" \
-					"[\\]^_`" \
-					"abcdefghijklmnopqrstuvwxyz" \
-					"{|}~" \
+					"  ! \" # $ % & ' ( ) * + , - . / " \
+					"0 1 2 3 4 5 6 7 8 9 " \
+					": ; < = > ? @ " \
+					"A B C D E F G H I J K L M N O P Q R S T U V W X Y Z " \
+					"[ \\ ] ^ _ ` " \
+					"a b c d e f g h i j k l m n o p q r s t u v w x y z " \
+					"{ | } ~ " \
 					""
 
 static inline bool
@@ -147,9 +149,6 @@ _vte_double_equal(double a,
  *
  * Setting this to a large value can cause dramatic slow-downs for some
  * xservers (notably fglrx), see bug #410534.
- *
- * Moreover, setting it larger than %VTE_DRAW_MAX_LENGTH is nonsensical,
- * as the higher layers will not submit runs longer than that value.
  */
 #define MAX_RUN_LENGTH 100
 
@@ -241,7 +240,7 @@ struct font_info {
 	struct unistr_info ascii_unistr_info[128];
 	GHashTable *other_unistr_info;
 
-	/* cell metrics */
+        /* cell metrics as taken from the font, not yet scaled by cell_{width,height}_scale */
 	gint width, height, ascent;
 
 	/* reusable string for UTF-8 conversion */
@@ -383,22 +382,35 @@ font_info_measure_font (struct font_info *info)
 {
 	PangoRectangle logical;
 
-	/* Estimate for ASCII characters. */
+        /* Measure U+0021..U+007E individually instead of all together and then
+         * averaging. For monospace fonts, the results should be the same, but
+         * if the user (by design, or trough mis-configuration) uses a proportional
+         * font, the latter method will greatly underestimate the required width,
+         * leading to unreadable, overlapping characters.
+         * https://gitlab.gnome.org/GNOME/vte/issues/138
+         */
+        int max_width{1};
+        int max_height{1};
+        for (char c = 0x21; c < 0x7f; ++c) {
+                pango_layout_set_text(info->layout, &c, 1);
+                pango_layout_get_extents (info->layout, NULL, &logical);
+                max_width = std::max(max_width, PANGO_PIXELS_CEIL(logical.width));
+                max_height = std::max(max_height, PANGO_PIXELS_CEIL(logical.height));
+        }
+
+        /* Use the sample text to get the baseline */
 	pango_layout_set_text (info->layout, VTE_DRAW_SINGLE_WIDE_CHARACTERS, -1);
 	pango_layout_get_extents (info->layout, NULL, &logical);
 	/* We don't do CEIL for width since we are averaging;
 	 * rounding is more accurate */
-	info->width  = PANGO_PIXELS (howmany (logical.width, strlen(VTE_DRAW_SINGLE_WIDE_CHARACTERS)));
-        /* Guard against pathological font since width=0 causes a FPE later on */
-	info->width = MAX (info->width, 1);
-
-	info->height = PANGO_PIXELS_CEIL (logical.height);
 	info->ascent = PANGO_PIXELS_CEIL (pango_layout_get_baseline (info->layout));
+
+        info->height = max_height;
+        info->width = max_width;
 
 	/* Now that we shaped the entire ASCII character string, cache glyph
 	 * info for them */
 	font_info_cache_ascii (info);
-
 
 	if (info->height == 0) {
 		info->height = PANGO_PIXELS_CEIL (logical.height);
@@ -411,7 +423,6 @@ font_info_measure_font (struct font_info *info)
 			  "vtepangocairo: %p font metrics = %dx%d (%d)\n",
 			  info, info->width, info->height, info->ascent);
 }
-
 
 static struct font_info *
 font_info_allocate (PangoContext *context)
@@ -755,8 +766,14 @@ guint _vte_draw_get_style(gboolean bold, gboolean italic) {
 
 struct _vte_draw {
 	struct font_info *fonts[4];
+        /* cell metrics, already adjusted by cell_{width,height}_scale */
+        int cell_width, cell_height;
+        GtkBorder char_spacing;
 
 	cairo_t *cr;
+
+        /* Cache the undercurl's rendered look. */
+        cairo_surface_t *undercurl_surface;
 };
 
 struct _vte_draw *
@@ -787,6 +804,11 @@ _vte_draw_free (struct _vte_draw *draw)
 		}
 	}
 
+        if (draw->undercurl_surface != NULL) {
+                cairo_surface_destroy (draw->undercurl_surface);
+                draw->undercurl_surface = NULL;
+        }
+
 	g_slice_free (struct _vte_draw, draw);
 }
 
@@ -803,6 +825,22 @@ _vte_draw_set_cairo (struct _vte_draw *draw,
                 g_assert (draw->cr != NULL);
                 draw->cr = NULL;
         }
+}
+
+void
+_vte_draw_clip(struct _vte_draw *draw,
+               cairo_rectangle_int_t const* rect)
+{
+        cairo_save(draw->cr);
+        cairo_rectangle(draw->cr,
+                        rect->x, rect->y, rect->width, rect->height);
+        cairo_clip(draw->cr);
+}
+
+void
+_vte_draw_unclip(struct _vte_draw *draw)
+{
+        cairo_restore(draw->cr);
 }
 
 static void
@@ -835,7 +873,9 @@ _vte_draw_clear (struct _vte_draw *draw, gint x, gint y, gint width, gint height
 void
 _vte_draw_set_text_font (struct _vte_draw *draw,
                          GtkWidget *widget,
-                         const PangoFontDescription *fontdesc)
+                         const PangoFontDescription *fontdesc,
+                         double cell_width_scale,
+                         double cell_height_scale)
 {
 	PangoFontDescription *bolddesc   = NULL;
 	PangoFontDescription *italicdesc = NULL;
@@ -895,39 +935,79 @@ _vte_draw_set_text_font (struct _vte_draw *draw,
 		font_info_destroy (draw->fonts[bold]);
 		draw->fonts[bold] = draw->fonts[normal];
 	}
+
+        /* Apply letter spacing and line spacing. */
+        draw->cell_width = draw->fonts[VTE_DRAW_NORMAL]->width * cell_width_scale;
+        draw->char_spacing.left = (draw->cell_width - draw->fonts[VTE_DRAW_NORMAL]->width) / 2;
+        draw->char_spacing.right = (draw->cell_width - draw->fonts[VTE_DRAW_NORMAL]->width + 1) / 2;
+        draw->cell_height = draw->fonts[VTE_DRAW_NORMAL]->height * cell_height_scale;
+        draw->char_spacing.top = (draw->cell_height - draw->fonts[VTE_DRAW_NORMAL]->height + 1) / 2;
+        draw->char_spacing.bottom = (draw->cell_height - draw->fonts[VTE_DRAW_NORMAL]->height) / 2;
+
+        /* Drop the undercurl's cached look. Will recache on demand. */
+        if (draw->undercurl_surface != NULL) {
+                cairo_surface_destroy (draw->undercurl_surface);
+                draw->undercurl_surface = NULL;
+        }
 }
 
 void
 _vte_draw_get_text_metrics(struct _vte_draw *draw,
-			   gint *width, gint *height, gint *ascent)
+                           int *cell_width, int *cell_height,
+                           int *char_ascent, int *char_descent,
+                           GtkBorder *char_spacing)
 {
 	g_return_if_fail (draw->fonts[VTE_DRAW_NORMAL] != NULL);
 
-	if (width)
-		*width  = draw->fonts[VTE_DRAW_NORMAL]->width;
-	if (height)
-		*height = draw->fonts[VTE_DRAW_NORMAL]->height;
-	if (ascent)
-		*ascent = draw->fonts[VTE_DRAW_NORMAL]->ascent;
+        if (cell_width)
+                *cell_width = draw->cell_width;
+        if (cell_height)
+                *cell_height = draw->cell_height;
+        if (char_ascent)
+                *char_ascent = draw->fonts[VTE_DRAW_NORMAL]->ascent;
+        if (char_descent)
+                *char_descent = draw->fonts[VTE_DRAW_NORMAL]->height - draw->fonts[VTE_DRAW_NORMAL]->ascent;
+        if (char_spacing)
+                *char_spacing = draw->char_spacing;
 }
 
 
-int
-_vte_draw_get_char_width (struct _vte_draw *draw, vteunistr c, int columns,
-						  guint style)
+/* Stores the left and right edges of the given glyph, relative to the cell's left edge. */
+void
+_vte_draw_get_char_edges (struct _vte_draw *draw, vteunistr c, int columns, guint style,
+                          int *left, int *right)
 {
-	struct unistr_info *uinfo;
+        int l, w, normal_width, fits_width;
 
-	g_return_val_if_fail (draw->fonts[VTE_DRAW_NORMAL] != NULL, 0);
+        if (G_UNLIKELY (draw->fonts[VTE_DRAW_NORMAL] == NULL)) {
+                if (left)
+                        *left = 0;
+                if (right)
+                        *right = 0;
+                return;
+        }
 
-	uinfo = font_info_get_unistr_info (draw->fonts[style], c);
-	return uinfo->width;
-}
+        w = font_info_get_unistr_info (draw->fonts[style], c)->width;
+        normal_width = draw->fonts[VTE_DRAW_NORMAL]->width * columns;
+        fits_width = draw->cell_width * columns;
 
-gboolean
-_vte_draw_has_bold (struct _vte_draw *draw, guint style)
-{
-	return (draw->fonts[style ^ VTE_DRAW_BOLD] != draw->fonts[style]);
+        if (G_LIKELY (w <= normal_width)) {
+                /* The regular case: The glyph is not wider than one (CJK: two) regular character(s).
+                 * Align to the left, after applying half (CJK: one) letter spacing. */
+                l = draw->char_spacing.left + (columns == 2 ? draw->char_spacing.right : 0);
+        } else if (G_UNLIKELY (w <= fits_width)) {
+                /* Slightly wider glyph, but still fits in the cell (spacing included). This case can
+                 * only happen with nonzero letter spacing. Center the glyph in the cell(s). */
+                l = (fits_width - w) / 2;
+        } else {
+                /* Even wider glyph: doesn't fit in the cell. Align at left and overflow on the right. */
+                l = 0;
+        }
+
+        if (left)
+                *left = l;
+        if (right)
+                *right = l + w;
 }
 
 /* Check if a unicode character is actually a graphic character we draw
@@ -946,9 +1026,9 @@ _vte_draw_unichar_is_local_graphic(vteunistr c)
 static void
 _vte_draw_terminal_draw_graphic(struct _vte_draw *draw, vteunistr c, vte::color::rgb const* fg,
                                 gint x, gint y,
-                                gint column_width, gint columns, gint row_height)
+                                gint font_width, gint columns, gint font_height)
 {
-        gint width, xcenter, xright, ycenter, ybottom;
+        gint width, height, xcenter, xright, ycenter, ybottom;
         int upper_half, lower_half, left_half, right_half;
         int light_line_width, heavy_line_width;
         double adjust;
@@ -956,9 +1036,10 @@ _vte_draw_terminal_draw_graphic(struct _vte_draw *draw, vteunistr c, vte::color:
 
         cairo_save (cr);
 
-        width = column_width * columns;
-        upper_half = row_height / 2;
-        lower_half = row_height - upper_half;
+        width = draw->cell_width * columns;
+        height = draw->cell_height;
+        upper_half = height / 2;
+        lower_half = height - upper_half;
         left_half = width / 2;
         right_half = width - left_half;
 
@@ -970,7 +1051,8 @@ _vte_draw_terminal_draw_graphic(struct _vte_draw *draw, vteunistr c, vte::color:
            k_eights; \
         })
 
-        light_line_width = column_width / 5;
+        /* Exclude the spacing for line width computation. */
+        light_line_width = font_width / 5;
         light_line_width = MAX (light_line_width, 1);
 
         if (c >= 0x2550 && c <= 0x256c) {
@@ -982,7 +1064,7 @@ _vte_draw_terminal_draw_graphic(struct _vte_draw *draw, vteunistr c, vte::color:
         xcenter = x + left_half;
         ycenter = y + upper_half;
         xright = x + width;
-        ybottom = y + row_height;
+        ybottom = y + height;
 
         switch (c) {
 
@@ -1109,7 +1191,7 @@ _vte_draw_terminal_draw_graphic(struct _vte_draw *draw, vteunistr c, vte::color:
                                        upper_half - light_line_width / 2,
                                        upper_half - light_line_width / 2 + light_line_width,
                                        upper_half - heavy_line_width / 2 + heavy_line_width,
-                                       row_height};
+                                       height};
                 int xi, yi;
                 cairo_set_line_width(cr, 0);
                 for (yi = 4; yi >= 0; yi--) {
@@ -1144,7 +1226,7 @@ _vte_draw_terminal_draw_graphic(struct _vte_draw *draw, vteunistr c, vte::color:
                 const guint v = c - 0x2500;
                 int size, line_width;
 
-                size = (v & 2) ? row_height : width;
+                size = (v & 2) ? height : width;
 
                 switch (v >> 2) {
                 case 1: /* triple dash */
@@ -1177,7 +1259,7 @@ _vte_draw_terminal_draw_graphic(struct _vte_draw *draw, vteunistr c, vte::color:
                 cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
                 if (v & 2) {
                         cairo_move_to(cr, xcenter + adjust, y);
-                        cairo_line_to(cr, xcenter + adjust, y + row_height);
+                        cairo_line_to(cr, xcenter + adjust, y + height);
                 } else {
                         cairo_move_to(cr, x, ycenter + adjust);
                         cairo_line_to(cr, x + width, ycenter + adjust);
@@ -1201,7 +1283,7 @@ _vte_draw_terminal_draw_graphic(struct _vte_draw *draw, vteunistr c, vte::color:
                 adjust = (line_width & 1) ? .5 : 0.;
                 cairo_set_line_width(cr, line_width);
 
-                radius = (column_width + 2) / 3;
+                radius = (font_width + 2) / 3;
                 radius = MAX(radius, heavy_line_width);
 
                 if (v & 2) {
@@ -1272,9 +1354,9 @@ _vte_draw_terminal_draw_graphic(struct _vte_draw *draw, vteunistr c, vte::color:
                 /* Use the number of eights from the top, so that
                  * U+2584 aligns with U+2596..U+259f.
                  */
-                const int h = EIGHTS (row_height, 8 - v);
+                const int h = EIGHTS (height, 8 - v);
 
-                cairo_rectangle(cr, x, y + h, width, row_height - h);
+                cairo_rectangle(cr, x, y + h, width, height - h);
                 cairo_fill (cr);
                 break;
         }
@@ -1294,13 +1376,13 @@ _vte_draw_terminal_draw_graphic(struct _vte_draw *draw, vteunistr c, vte::color:
                  */
                 const int w = EIGHTS (width, 8 - v);
 
-                cairo_rectangle(cr, x, y, w, row_height);
+                cairo_rectangle(cr, x, y, w, height);
                 cairo_fill (cr);
                 break;
         }
 
         case 0x2590: /* right half block */
-                cairo_rectangle(cr, x + left_half, y, right_half, row_height);
+                cairo_rectangle(cr, x + left_half, y, right_half, height);
                 cairo_fill (cr);
                 break;
 
@@ -1312,13 +1394,13 @@ _vte_draw_terminal_draw_graphic(struct _vte_draw *draw, vteunistr c, vte::color:
                                        fg->green / 65535.,
                                        fg->blue / 65535.,
                                        (c - 0x2590) / 4.);
-                cairo_rectangle(cr, x, y, width, row_height);
+                cairo_rectangle(cr, x, y, width, height);
                 cairo_fill (cr);
                 break;
 
         case 0x2594: /* upper one eighth block */
         {
-                const int h = EIGHTS (row_height, 1); /* Align with U+2587 */
+                const int h = EIGHTS (height, 1); /* Align with U+2587 */
                 cairo_rectangle(cr, x, y, width, h);
                 cairo_fill (cr);
                 break;
@@ -1327,7 +1409,7 @@ _vte_draw_terminal_draw_graphic(struct _vte_draw *draw, vteunistr c, vte::color:
         case 0x2595: /* right one eighth block */
         {
                 const int w = EIGHTS (width, 7);  /* Align with U+2589 */
-                cairo_rectangle(cr, x + w, y, width - w, row_height);
+                cairo_rectangle(cr, x + w, y, width - w, height);
                 cairo_fill (cr);
                 break;
         }
@@ -1420,10 +1502,20 @@ _vte_draw_text_internal (struct _vte_draw *draw,
 
 	for (i = 0; i < n_requests; i++) {
 		vteunistr c = requests[i].c;
-		int x = requests[i].x;
-		int y = requests[i].y + font->ascent;
+
+                if (G_UNLIKELY (requests[i].mirror)) {
+                        vte_bidi_get_mirror_char (c, requests[i].box_mirror, &c);
+                }
+
 		struct unistr_info *uinfo = font_info_get_unistr_info (font, c);
 		union unistr_font_info *ufi = &uinfo->ufi;
+                int x, y;
+
+                _vte_draw_get_char_edges(draw, c, requests[i].columns, style, &x, NULL);
+                x += requests[i].x;
+                /* Bold/italic versions might have different ascents. In order to align their
+                 * baselines, we offset by the normal font's ascent here. (Bug 137.) */
+                y = requests[i].y + draw->char_spacing.top + draw->fonts[VTE_DRAW_NORMAL]->ascent;
 
                 if (_vte_draw_unichar_is_local_graphic(c)) {
                         _vte_draw_terminal_draw_graphic(draw, c, color,
@@ -1498,22 +1590,6 @@ _vte_draw_text (struct _vte_draw *draw,
 	}
 
 	_vte_draw_text_internal (draw, requests, n_requests, color, alpha, style);
-
-	/* handle fonts that lack a bold face by double-striking */
-	if ((style & VTE_DRAW_BOLD) && !_vte_draw_has_bold (draw, style)) {
-		gsize i;
-
-		/* Take a step to the right. */
-		for (i = 0; i < n_requests; i++) {
-			requests[i].x++;
-		}
-		_vte_draw_text_internal (draw, requests,
-					   n_requests, color, alpha, style);
-		/* Now take a step back. */
-		for (i = 0; i < n_requests; i++) {
-			requests[i].x--;
-		}
-	}
 }
 
 /* The following two functions are unused since commit 154abade902850afb44115cccf8fcac51fc082f0,
@@ -1606,4 +1682,86 @@ _vte_draw_draw_line(struct _vte_draw *draw,
                                  x, y,
                                  MAX(line_width, xp - x + 1), MAX(line_width, yp - y + 1),
                                  color, alpha);
+}
+
+static inline double
+_vte_draw_get_undercurl_rad(gint width)
+{
+        return width / 2. / sqrt(2);
+}
+
+static inline double
+_vte_draw_get_undercurl_arc_height(gint width)
+{
+        return _vte_draw_get_undercurl_rad(width) * (1. - sqrt(2) / 2.);
+}
+
+double
+_vte_draw_get_undercurl_height(gint width, double line_width)
+{
+        return 2. * _vte_draw_get_undercurl_arc_height(width) + line_width;
+}
+
+void
+_vte_draw_draw_undercurl(struct _vte_draw *draw,
+                         gint x, double y,
+                         double line_width,
+                         gint count,
+                         vte::color::rgb const *color, double alpha)
+{
+        /* The end of the curly line slightly overflows to the next cell, so the canvas
+         * caching the rendered look has to be wider not to chop this off. */
+        gint x_padding = line_width + 1;  /* ceil, kind of */
+
+        gint surface_top = y;  /* floor */
+
+        g_assert(draw->cr);
+
+        _vte_debug_print (VTE_DEBUG_DRAW,
+                        "draw_undercurl (x=%d, y=%f, count=%d, color=(%d,%d,%d,%.3f))\n",
+                        x, y, count,
+                        color->red, color->green, color->blue,
+                        alpha);
+
+        if (G_UNLIKELY (draw->undercurl_surface == NULL)) {
+                /* Cache the undercurl's look. The design assumes that until the cached look is
+                 * invalidated (the font is changed), this method is always called with the "y"
+                 * parameter having the same fractional part, and the same "line_width" parameter.
+                 * For caching, only the fractional part of "y" is used. */
+                cairo_t *undercurl_cr;
+
+                double rad = _vte_draw_get_undercurl_rad(draw->cell_width);
+                double y_bottom = y + _vte_draw_get_undercurl_height(draw->cell_width, line_width);
+                double y_center = (y + y_bottom) / 2.;
+                gint surface_bottom = y_bottom + 1;  /* ceil, kind of */
+
+                _vte_debug_print (VTE_DEBUG_DRAW,
+                                  "caching undercurl shape\n");
+
+                /* Add a line_width of margin horizontally on both sides, for nice antialias overflowing. */
+                draw->undercurl_surface = cairo_surface_create_similar (cairo_get_target (draw->cr),
+                                                                        CAIRO_CONTENT_ALPHA,
+                                                                        draw->cell_width + 2 * x_padding,
+                                                                        surface_bottom - surface_top);
+                undercurl_cr = cairo_create (draw->undercurl_surface);
+                cairo_set_operator (undercurl_cr, CAIRO_OPERATOR_OVER);
+                /* First quarter circle, similar to the left half of the tilde symbol. */
+                cairo_arc (undercurl_cr, x_padding + draw->cell_width / 4., y_center - surface_top + draw->cell_width / 4., rad, M_PI * 5 / 4, M_PI * 7 / 4);
+                /* Second quarter circle, similar to the right half of the tilde symbol. */
+                cairo_arc_negative (undercurl_cr, x_padding + draw->cell_width * 3 / 4., y_center - surface_top - draw->cell_width / 4., rad, M_PI * 3 / 4, M_PI / 4);
+                cairo_set_line_width (undercurl_cr, line_width);
+                cairo_stroke (undercurl_cr);
+                cairo_destroy (undercurl_cr);
+        }
+
+        /* Paint the cached look of the undercurl using the desired look.
+         * The cached look takes the fractional part of "y" into account,
+         * here we only offset by its integer part. */
+        cairo_save (draw->cr);
+        cairo_set_operator (draw->cr, CAIRO_OPERATOR_OVER);
+        _vte_draw_set_source_color_alpha (draw, color, alpha);
+        for (int i = 0; i < count; i++) {
+                cairo_mask_surface (draw->cr, draw->undercurl_surface, x - x_padding + i * draw->cell_width, surface_top);
+        }
+        cairo_restore (draw->cr);
 }

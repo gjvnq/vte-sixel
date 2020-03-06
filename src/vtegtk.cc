@@ -53,6 +53,7 @@
 #include "vtedefines.hh"
 #include "vteinternal.hh"
 #include "vteaccess.h"
+#include "widget.hh"
 
 #include "vtegtk.hh"
 #include "vteregexinternal.hh"
@@ -71,7 +72,10 @@ struct _VteTerminalClassPrivate {
 
 #ifdef VTE_DEBUG
 G_DEFINE_TYPE_WITH_CODE(VteTerminal, vte_terminal, GTK_TYPE_WIDGET,
-                        G_ADD_PRIVATE(VteTerminal)
+                        {
+                                VteTerminal_private_offset =
+                                        g_type_add_instance_private(g_define_type_id, sizeof(vte::platform::Widget));
+                        }
                         g_type_add_class_private (g_define_type_id, sizeof (VteTerminalClassPrivate));
                         G_IMPLEMENT_INTERFACE(GTK_TYPE_SCROLLABLE, NULL)
                         if (_vte_debug_on(VTE_DEBUG_LIFECYCLE)) {
@@ -79,16 +83,34 @@ G_DEFINE_TYPE_WITH_CODE(VteTerminal, vte_terminal, GTK_TYPE_WIDGET,
                         })
 #else
 G_DEFINE_TYPE_WITH_CODE(VteTerminal, vte_terminal, GTK_TYPE_WIDGET,
-                        G_ADD_PRIVATE(VteTerminal)
+                        {
+                                VteTerminal_private_offset =
+                                        g_type_add_instance_private(g_define_type_id, sizeof(vte::platform::Widget));
+                        }
                         g_type_add_class_private (g_define_type_id, sizeof (VteTerminalClassPrivate));
                         G_IMPLEMENT_INTERFACE(GTK_TYPE_SCROLLABLE, NULL))
 #endif
 
-#define IMPL(t) (reinterpret_cast<VteTerminalPrivate*>(vte_terminal_get_instance_private(t)))
+static inline
+vte::platform::Widget* get_widget(VteTerminal* terminal)
+{
+        return reinterpret_cast<vte::platform::Widget*>(vte_terminal_get_instance_private(terminal));
+}
+
+#define WIDGET(t) (get_widget(t))
+
+vte::terminal::Terminal*
+_vte_terminal_get_impl(VteTerminal *terminal)
+{
+        return WIDGET(terminal)->terminal();
+}
+
+#define IMPL(t) (_vte_terminal_get_impl(t))
 
 guint signals[LAST_SIGNAL];
 GParamSpec *pspecs[LAST_PROP];
 GTimer *process_timer;
+uint64_t g_test_flags = 0;
 
 static bool
 valid_color(GdkRGBA const* color)
@@ -99,17 +121,12 @@ valid_color(GdkRGBA const* color)
                color->alpha >= 0. && color->alpha <= 1.;
 }
 
-VteTerminalPrivate *_vte_terminal_get_impl(VteTerminal *terminal)
-{
-        return IMPL(terminal);
-}
-
 static void
 vte_terminal_set_hadjustment(VteTerminal *terminal,
                              GtkAdjustment *adjustment)
 {
         g_return_if_fail(adjustment == nullptr || GTK_IS_ADJUSTMENT(adjustment));
-        IMPL(terminal)->widget_set_hadjustment(adjustment);
+        WIDGET(terminal)->set_hadjustment(adjustment);
 }
 
 static void
@@ -117,7 +134,7 @@ vte_terminal_set_vadjustment(VteTerminal *terminal,
                              GtkAdjustment *adjustment)
 {
         g_return_if_fail(adjustment == nullptr || GTK_IS_ADJUSTMENT(adjustment));
-        IMPL(terminal)->widget_set_vadjustment(adjustment);
+        WIDGET(terminal)->set_vadjustment(adjustment);
 }
 
 static void
@@ -140,13 +157,13 @@ vte_terminal_set_vscroll_policy(VteTerminal *terminal,
 static void
 vte_terminal_real_copy_clipboard(VteTerminal *terminal)
 {
-	IMPL(terminal)->widget_copy(VTE_SELECTION_CLIPBOARD, VTE_FORMAT_TEXT);
+	WIDGET(terminal)->copy(VTE_SELECTION_CLIPBOARD, VTE_FORMAT_TEXT);
 }
 
 static void
 vte_terminal_real_paste_clipboard(VteTerminal *terminal)
 {
-	IMPL(terminal)->widget_paste(GDK_SELECTION_CLIPBOARD);
+	WIDGET(terminal)->paste(GDK_SELECTION_CLIPBOARD);
 }
 
 static void
@@ -156,7 +173,7 @@ vte_terminal_style_updated (GtkWidget *widget)
 
         GTK_WIDGET_CLASS (vte_terminal_parent_class)->style_updated (widget);
 
-        IMPL(terminal)->widget_style_updated();
+        WIDGET(terminal)->style_updated();
 }
 
 static gboolean
@@ -180,42 +197,42 @@ vte_terminal_key_press(GtkWidget *widget, GdkEventKey *event)
 		}
 	}
 
-        return IMPL(terminal)->widget_key_press(event);
+        return WIDGET(terminal)->key_press(event);
 }
 
 static gboolean
 vte_terminal_key_release(GtkWidget *widget, GdkEventKey *event)
 {
 	VteTerminal *terminal = VTE_TERMINAL(widget);
-        return IMPL(terminal)->widget_key_release(event);
+        return WIDGET(terminal)->key_release(event);
 }
 
 static gboolean
 vte_terminal_motion_notify(GtkWidget *widget, GdkEventMotion *event)
 {
         VteTerminal *terminal = VTE_TERMINAL(widget);
-        return IMPL(terminal)->widget_motion_notify(event);
+        return WIDGET(terminal)->motion_notify(event);
 }
 
 static gboolean
 vte_terminal_button_press(GtkWidget *widget, GdkEventButton *event)
 {
 	VteTerminal *terminal = VTE_TERMINAL(widget);
-        return IMPL(terminal)->widget_button_press(event);
+        return WIDGET(terminal)->button_press(event);
 }
 
 static gboolean
 vte_terminal_button_release(GtkWidget *widget, GdkEventButton *event)
 {
 	VteTerminal *terminal = VTE_TERMINAL(widget);
-        return IMPL(terminal)->widget_button_release(event);
+        return WIDGET(terminal)->button_release(event);
 }
 
 static gboolean
 vte_terminal_scroll(GtkWidget *widget, GdkEventScroll *event)
 {
 	VteTerminal *terminal = VTE_TERMINAL(widget);
-        IMPL(terminal)->widget_scroll(event);
+        WIDGET(terminal)->scroll(event);
         return TRUE;
 }
 
@@ -223,7 +240,7 @@ static gboolean
 vte_terminal_focus_in(GtkWidget *widget, GdkEventFocus *event)
 {
 	VteTerminal *terminal = VTE_TERMINAL(widget);
-        IMPL(terminal)->widget_focus_in(event);
+        WIDGET(terminal)->focus_in(event);
         return FALSE;
 }
 
@@ -231,7 +248,7 @@ static gboolean
 vte_terminal_focus_out(GtkWidget *widget, GdkEventFocus *event)
 {
 	VteTerminal *terminal = VTE_TERMINAL(widget);
-        IMPL(terminal)->widget_focus_out(event);
+        WIDGET(terminal)->focus_out(event);
         return FALSE;
 }
 
@@ -245,7 +262,7 @@ vte_terminal_enter(GtkWidget *widget, GdkEventCrossing *event)
 		ret = GTK_WIDGET_CLASS (vte_terminal_parent_class)->enter_notify_event (widget, event);
 	}
 
-        IMPL(terminal)->widget_enter(event);
+        WIDGET(terminal)->enter(event);
 
         return ret;
 }
@@ -260,17 +277,9 @@ vte_terminal_leave(GtkWidget *widget, GdkEventCrossing *event)
 		ret = GTK_WIDGET_CLASS (vte_terminal_parent_class)->leave_notify_event (widget, event);
 	}
 
-        IMPL(terminal)->widget_leave(event);
+        WIDGET(terminal)->leave(event);
 
         return ret;
-}
-
-static gboolean
-vte_terminal_visibility_notify(GtkWidget *widget, GdkEventVisibility *event)
-{
-	VteTerminal *terminal = VTE_TERMINAL(widget);
-        IMPL(terminal)->widget_visibility_notify(event);
-	return FALSE;
 }
 
 static void
@@ -279,7 +288,7 @@ vte_terminal_get_preferred_width(GtkWidget *widget,
 				 int       *natural_width)
 {
 	VteTerminal *terminal = VTE_TERMINAL(widget);
-        IMPL(terminal)->widget_get_preferred_width(minimum_width, natural_width);
+        WIDGET(terminal)->get_preferred_width(minimum_width, natural_width);
 }
 
 static void
@@ -288,14 +297,14 @@ vte_terminal_get_preferred_height(GtkWidget *widget,
 				  int       *natural_height)
 {
 	VteTerminal *terminal = VTE_TERMINAL(widget);
-        IMPL(terminal)->widget_get_preferred_height(minimum_height, natural_height);
+        WIDGET(terminal)->get_preferred_height(minimum_height, natural_height);
 }
 
 static void
 vte_terminal_size_allocate(GtkWidget *widget, GtkAllocation *allocation)
 {
 	VteTerminal *terminal = VTE_TERMINAL(widget);
-        IMPL(terminal)->widget_size_allocate(allocation);
+        WIDGET(terminal)->size_allocate(allocation);
 }
 
 static gboolean
@@ -303,24 +312,28 @@ vte_terminal_draw(GtkWidget *widget,
                   cairo_t *cr)
 {
         VteTerminal *terminal = VTE_TERMINAL (widget);
-        IMPL(terminal)->widget_draw(cr);
+        WIDGET(terminal)->draw(cr);
         return FALSE;
 }
 
 static void
 vte_terminal_realize(GtkWidget *widget)
 {
+	_vte_debug_print(VTE_DEBUG_LIFECYCLE, "vte_terminal_realize()\n");
+
         GTK_WIDGET_CLASS(vte_terminal_parent_class)->realize(widget);
 
         VteTerminal *terminal= VTE_TERMINAL(widget);
-        IMPL(terminal)->widget_realize();
+        WIDGET(terminal)->realize();
 }
 
 static void
 vte_terminal_unrealize(GtkWidget *widget)
 {
+	_vte_debug_print(VTE_DEBUG_LIFECYCLE, "vte_terminal_unrealize()\n");
+
         VteTerminal *terminal = VTE_TERMINAL (widget);
-        IMPL(terminal)->widget_unrealize();
+        WIDGET(terminal)->unrealize();
 
         GTK_WIDGET_CLASS(vte_terminal_parent_class)->unrealize(widget);
 }
@@ -333,7 +346,7 @@ vte_terminal_map(GtkWidget *widget)
         VteTerminal *terminal = VTE_TERMINAL(widget);
         GTK_WIDGET_CLASS(vte_terminal_parent_class)->map(widget);
 
-        IMPL(terminal)->widget_map();
+        WIDGET(terminal)->map();
 }
 
 static void
@@ -342,7 +355,7 @@ vte_terminal_unmap(GtkWidget *widget)
         _vte_debug_print(VTE_DEBUG_LIFECYCLE, "vte_terminal_unmap()\n");
 
         VteTerminal *terminal = VTE_TERMINAL(widget);
-        IMPL(terminal)->widget_unmap();
+        WIDGET(terminal)->unmap();
 
         GTK_WIDGET_CLASS(vte_terminal_parent_class)->unmap(widget);
 }
@@ -357,7 +370,17 @@ vte_terminal_screen_changed (GtkWidget *widget,
                 GTK_WIDGET_CLASS (vte_terminal_parent_class)->screen_changed (widget, previous_screen);
         }
 
-        IMPL(terminal)->widget_screen_changed(previous_screen);
+        WIDGET(terminal)->screen_changed(previous_screen);
+}
+
+static void
+vte_terminal_constructed (GObject *object)
+{
+        VteTerminal *terminal = VTE_TERMINAL (object);
+
+        G_OBJECT_CLASS (vte_terminal_parent_class)->constructed (object);
+
+        WIDGET(terminal)->constructed();
 }
 
 static void
@@ -375,17 +398,30 @@ vte_terminal_init(VteTerminal *terminal)
 
 	/* Initialize private data. NOTE: place is zeroed */
 	place = vte_terminal_get_instance_private(terminal);
-        new (place) VteTerminalPrivate(terminal);
+        new (place) vte::platform::Widget(terminal);
 
         gtk_widget_set_has_window(&terminal->widget, FALSE);
 }
 
 static void
+vte_terminal_dispose(GObject *object)
+{
+	_vte_debug_print(VTE_DEBUG_LIFECYCLE, "vte_terminal_dispose()\n");
+
+	VteTerminal *terminal = VTE_TERMINAL (object);
+        WIDGET(terminal)->dispose();
+
+	/* Call the inherited dispose() method. */
+	G_OBJECT_CLASS(vte_terminal_parent_class)->dispose(object);
+}
+
+static void
 vte_terminal_finalize(GObject *object)
 {
-    	VteTerminal *terminal = VTE_TERMINAL (object);
+	_vte_debug_print(VTE_DEBUG_LIFECYCLE, "vte_terminal_finalize()\n");
 
-        IMPL(terminal)->~VteTerminalPrivate();
+	VteTerminal *terminal = VTE_TERMINAL (object);
+        WIDGET(terminal)->~Widget();
 
 	/* Call the inherited finalize() method. */
 	G_OBJECT_CLASS(vte_terminal_parent_class)->finalize(object);
@@ -398,21 +434,22 @@ vte_terminal_get_property (GObject *object,
                            GParamSpec *pspec)
 {
         VteTerminal *terminal = VTE_TERMINAL (object);
+        auto widget = WIDGET(terminal);
         auto impl = IMPL(terminal);
 
 	switch (prop_id)
                 {
                 case PROP_HADJUSTMENT:
-                        g_value_set_object (value, impl->m_hadjustment);
+                        g_value_set_object (value, widget->get_hadjustment());
                         break;
                 case PROP_VADJUSTMENT:
-                        g_value_set_object (value, impl->m_vadjustment);
+                        g_value_set_object (value, widget->get_vadjustment());
                         break;
                 case PROP_HSCROLL_POLICY:
-                        g_value_set_enum (value, impl->m_hscroll_policy);
+                        g_value_set_enum (value, widget->hscroll_policy());
                         break;
                 case PROP_VSCROLL_POLICY:
-                        g_value_set_enum (value, impl->m_vscroll_policy);
+                        g_value_set_enum (value, widget->vscroll_policy());
                         break;
                 case PROP_ALLOW_BOLD:
                         g_value_set_boolean (value, vte_terminal_get_allow_bold (terminal));
@@ -425,6 +462,15 @@ vte_terminal_get_property (GObject *object,
                         break;
                 case PROP_BACKSPACE_BINDING:
                         g_value_set_enum (value, impl->m_backspace_binding);
+                        break;
+                case PROP_BOLD_IS_BRIGHT:
+                        g_value_set_boolean (value, vte_terminal_get_bold_is_bright (terminal));
+                        break;
+                case PROP_CELL_HEIGHT_SCALE:
+                        g_value_set_double (value, vte_terminal_get_cell_height_scale (terminal));
+                        break;
+                case PROP_CELL_WIDTH_SCALE:
+                        g_value_set_double (value, vte_terminal_get_cell_width_scale (terminal));
                         break;
                 case PROP_CJK_AMBIGUOUS_WIDTH:
                         g_value_set_int (value, vte_terminal_get_cjk_ambiguous_width (terminal));
@@ -443,6 +489,12 @@ vte_terminal_get_property (GObject *object,
                         break;
                 case PROP_DELETE_BINDING:
                         g_value_set_enum (value, impl->m_delete_binding);
+                        break;
+                case PROP_ENABLE_BIDI:
+                        g_value_set_boolean (value, vte_terminal_get_enable_bidi (terminal));
+                        break;
+                case PROP_ENABLE_SHAPING:
+                        g_value_set_boolean (value, vte_terminal_get_enable_shaping (terminal));
                         break;
                 case PROP_ENCODING:
                         g_value_set_string (value, vte_terminal_get_encoding (terminal));
@@ -472,13 +524,16 @@ vte_terminal_get_property (GObject *object,
                         g_value_set_boolean (value, vte_terminal_get_rewrap_on_resize (terminal));
                         break;
                 case PROP_SCROLLBACK_LINES:
-                        g_value_set_uint (value, impl->m_scrollback_lines);
+                        g_value_set_uint (value, vte_terminal_get_scrollback_lines(terminal));
                         break;
                 case PROP_SCROLL_ON_KEYSTROKE:
-                        g_value_set_boolean (value, impl->m_scroll_on_keystroke);
+                        g_value_set_boolean (value, vte_terminal_get_scroll_on_keystroke(terminal));
                         break;
                 case PROP_SCROLL_ON_OUTPUT:
-                        g_value_set_boolean (value, impl->m_scroll_on_output);
+                        g_value_set_boolean (value, vte_terminal_get_scroll_on_output(terminal));
+                        break;
+                case PROP_TEXT_BLINK_MODE:
+                        g_value_set_enum (value, vte_terminal_get_text_blink_mode (terminal));
                         break;
                 case PROP_WINDOW_TITLE:
                         g_value_set_string (value, vte_terminal_get_window_title (terminal));
@@ -527,6 +582,15 @@ vte_terminal_set_property (GObject *object,
                 case PROP_BACKSPACE_BINDING:
                         vte_terminal_set_backspace_binding (terminal, (VteEraseBinding)g_value_get_enum (value));
                         break;
+                case PROP_BOLD_IS_BRIGHT:
+                        vte_terminal_set_bold_is_bright (terminal, g_value_get_boolean (value));
+                        break;
+                case PROP_CELL_HEIGHT_SCALE:
+                        vte_terminal_set_cell_height_scale (terminal, g_value_get_double (value));
+                        break;
+                case PROP_CELL_WIDTH_SCALE:
+                        vte_terminal_set_cell_width_scale (terminal, g_value_get_double (value));
+                        break;
                 case PROP_CJK_AMBIGUOUS_WIDTH:
                         vte_terminal_set_cjk_ambiguous_width (terminal, g_value_get_int (value));
                         break;
@@ -538,6 +602,12 @@ vte_terminal_set_property (GObject *object,
                         break;
                 case PROP_DELETE_BINDING:
                         vte_terminal_set_delete_binding (terminal, (VteEraseBinding)g_value_get_enum (value));
+                        break;
+                case PROP_ENABLE_BIDI:
+                        vte_terminal_set_enable_bidi (terminal, g_value_get_boolean (value));
+                        break;
+                case PROP_ENABLE_SHAPING:
+                        vte_terminal_set_enable_shaping (terminal, g_value_get_boolean (value));
                         break;
                 case PROP_ENCODING:
                         vte_terminal_set_encoding (terminal, g_value_get_string (value), NULL);
@@ -568,6 +638,9 @@ vte_terminal_set_property (GObject *object,
                         break;
                 case PROP_SCROLL_ON_OUTPUT:
                         vte_terminal_set_scroll_on_output (terminal, g_value_get_boolean (value));
+                        break;
+                case PROP_TEXT_BLINK_MODE:
+                        vte_terminal_set_text_blink_mode (terminal, (VteTextBlinkMode)g_value_get_enum (value));
                         break;
                 case PROP_WORD_CHAR_EXCEPTIONS:
                         vte_terminal_set_word_char_exceptions (terminal, g_value_get_string (value));
@@ -612,7 +685,6 @@ vte_terminal_class_init(VteTerminalClass *klass)
                                  "  !  _vte_invalidate_cells (dirty)\n"
                                  "  *  _vte_invalidate_all\n"
                                  "  )  end _vte_terminal_process_incoming\n"
-                                 "  -  gdk_window_process_updates\n"
                                  "  =  vte_terminal_paint\n"
                                  "  ]} end update_timeout\n"
                                  "  >  end process_timeout\n");
@@ -622,14 +694,14 @@ vte_terminal_class_init(VteTerminalClass *klass)
 	_VTE_DEBUG_IF (VTE_DEBUG_UPDATES) gdk_window_set_debug_updates(TRUE);
 
 	bindtextdomain(GETTEXT_PACKAGE, LOCALEDIR);
-#ifdef HAVE_DECL_BIND_TEXTDOMAIN_CODESET
 	bind_textdomain_codeset(GETTEXT_PACKAGE, "UTF-8");
-#endif
 
 	gobject_class = G_OBJECT_CLASS(klass);
 	widget_class = GTK_WIDGET_CLASS(klass);
 
 	/* Override some of the default handlers. */
+        gobject_class->constructed = vte_terminal_constructed;
+        gobject_class->dispose = vte_terminal_dispose;
 	gobject_class->finalize = vte_terminal_finalize;
         gobject_class->get_property = vte_terminal_get_property;
         gobject_class->set_property = vte_terminal_set_property;
@@ -648,7 +720,6 @@ vte_terminal_class_init(VteTerminalClass *klass)
 	widget_class->leave_notify_event = vte_terminal_leave;
 	widget_class->focus_in_event = vte_terminal_focus_in;
 	widget_class->focus_out_event = vte_terminal_focus_out;
-	widget_class->visibility_notify_event = vte_terminal_visibility_notify;
 	widget_class->style_updated = vte_terminal_style_updated;
 	widget_class->get_preferred_width = vte_terminal_get_preferred_width;
 	widget_class->get_preferred_height = vte_terminal_get_preferred_height;
@@ -723,6 +794,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_EOF],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::child-exited:
@@ -742,6 +816,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              g_cclosure_marshal_VOID__INT,
                              G_TYPE_NONE,
                              1, G_TYPE_INT);
+        g_signal_set_va_marshaller(signals[SIGNAL_CHILD_EXITED],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__INTv);
 
         /**
          * VteTerminal::window-title-changed:
@@ -758,12 +835,15 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_WINDOW_TITLE_CHANGED],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::icon-title-changed:
          * @vteterminal: the object which received the signal
          *
-         * Emitted when the terminal's %icon_title field is modified.
+         * Deprecated: 0.54: This signal is never emitted.
          */
         signals[SIGNAL_ICON_TITLE_CHANGED] =
                 g_signal_new(I_("icon-title-changed"),
@@ -774,6 +854,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_ICON_TITLE_CHANGED],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::current-directory-uri-changed:
@@ -790,6 +873,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_CURRENT_DIRECTORY_URI_CHANGED],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::current-file-uri-changed:
@@ -806,6 +892,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_CURRENT_FILE_URI_CHANGED],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::hyperlink-hover-uri-changed:
@@ -833,14 +922,17 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              _vte_marshal_VOID__STRING_BOXED,
                              G_TYPE_NONE,
                              2, G_TYPE_STRING, GDK_TYPE_RECTANGLE | G_SIGNAL_TYPE_STATIC_SCOPE);
+        g_signal_set_va_marshaller(signals[SIGNAL_HYPERLINK_HOVER_URI_CHANGED],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   _vte_marshal_VOID__STRING_BOXEDv);
 
         /**
          * VteTerminal::encoding-changed:
          * @vteterminal: the object which received the signal
          *
-         * Emitted whenever the terminal's current encoding has changed, either
-         * as a result of receiving a control sequence which toggled between the
-         * local and UTF-8 encodings, or at the parent application's request.
+         * Emitted whenever the terminal's current encoding has changed.
+         *
+         * Note: support for non-UTF-8 is deprecated.
          */
         signals[SIGNAL_ENCODING_CHANGED] =
                 g_signal_new(I_("encoding-changed"),
@@ -851,6 +943,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_ENCODING_CHANGED],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::commit:
@@ -871,6 +966,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              _vte_marshal_VOID__STRING_UINT,
                              G_TYPE_NONE, 2, G_TYPE_STRING, G_TYPE_UINT);
+        g_signal_set_va_marshaller(signals[SIGNAL_COMMIT],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   _vte_marshal_VOID__STRING_UINTv);
 
         /**
          * VteTerminal::char-size-changed:
@@ -878,8 +976,10 @@ vte_terminal_class_init(VteTerminalClass *klass)
          * @width: the new character cell width
          * @height: the new character cell height
          *
-         * Emitted whenever selection of a new font causes the values of the
-         * %char_width or %char_height fields to change.
+         * Emitted whenever the cell size changes, e.g. due to a change in
+         * font, font-scale or cell-width/height-scale.
+         *
+         * Note that this signal should rather be called "cell-size-changed".
          */
         signals[SIGNAL_CHAR_SIZE_CHANGED] =
                 g_signal_new(I_("char-size-changed"),
@@ -890,6 +990,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              _vte_marshal_VOID__UINT_UINT,
                              G_TYPE_NONE, 2, G_TYPE_UINT, G_TYPE_UINT);
+        g_signal_set_va_marshaller(signals[SIGNAL_CHAR_SIZE_CHANGED],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   _vte_marshal_VOID__UINT_UINTv);
 
         /**
          * VteTerminal::selection-changed:
@@ -906,6 +1009,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                               NULL,
                               g_cclosure_marshal_VOID__VOID,
                               G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_SELECTION_CHANGED],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::contents-changed:
@@ -923,6 +1029,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_CONTENTS_CHANGED],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::cursor-moved:
@@ -940,6 +1049,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_CURSOR_MOVED],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::deiconify-window:
@@ -956,6 +1068,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_DEICONIFY_WINDOW],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::iconify-window:
@@ -972,6 +1087,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_ICONIFY_WINDOW],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::raise-window:
@@ -988,6 +1106,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_RAISE_WINDOW],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::lower-window:
@@ -1004,6 +1125,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_LOWER_WINDOW],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::refresh-window:
@@ -1020,6 +1144,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_REFRESH_WINDOW],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::restore-window:
@@ -1036,6 +1163,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_RESTORE_WINDOW],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::maximize-window:
@@ -1052,6 +1182,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_MAXIMIZE_WINDOW],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::resize-window:
@@ -1070,6 +1203,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              _vte_marshal_VOID__UINT_UINT,
                              G_TYPE_NONE, 2, G_TYPE_UINT, G_TYPE_UINT);
+        g_signal_set_va_marshaller(signals[SIGNAL_RESIZE_WINDOW],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   _vte_marshal_VOID__UINT_UINTv);
 
         /**
          * VteTerminal::move-window:
@@ -1088,6 +1224,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              _vte_marshal_VOID__UINT_UINT,
                              G_TYPE_NONE, 2, G_TYPE_UINT, G_TYPE_UINT);
+        g_signal_set_va_marshaller(signals[SIGNAL_MOVE_WINDOW],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   _vte_marshal_VOID__UINT_UINTv);
 
         /**
          * VteTerminal::increase-font-size:
@@ -1104,6 +1243,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_INCREASE_FONT_SIZE],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::decrease-font-size:
@@ -1120,6 +1262,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_DECREASE_FONT_SIZE],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::text-modified:
@@ -1138,6 +1283,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_TEXT_MODIFIED],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::text-inserted:
@@ -1156,6 +1304,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_TEXT_INSERTED],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::text-deleted:
@@ -1174,6 +1325,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_TEXT_DELETED],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::text-scrolled:
@@ -1193,6 +1347,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__INT,
                              G_TYPE_NONE, 1, G_TYPE_INT);
+        g_signal_set_va_marshaller(signals[SIGNAL_TEXT_SCROLLED],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__INTv);
 
         /**
          * VteTerminal::copy-clipboard:
@@ -1209,6 +1366,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
 			     NULL,
                              g_cclosure_marshal_VOID__VOID,
 			     G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_COPY_CLIPBOARD],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::paste-clipboard:
@@ -1225,6 +1385,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
 			     NULL,
                              g_cclosure_marshal_VOID__VOID,
 			     G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_PASTE_CLIPBOARD],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal::bell:
@@ -1242,6 +1405,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
                              NULL,
                              g_cclosure_marshal_VOID__VOID,
                              G_TYPE_NONE, 0);
+        g_signal_set_va_marshaller(signals[SIGNAL_BELL],
+                                   G_OBJECT_CLASS_TYPE(klass),
+                                   g_cclosure_marshal_VOID__VOIDv);
 
         /**
          * VteTerminal:allow-bold:
@@ -1291,11 +1457,54 @@ vte_terminal_class_init(VteTerminalClass *klass)
                                    (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
 
         /**
+         * VteTerminal:bold-is-bright:
+         *
+         * Whether the SGR 1 attribute also switches to the bright counterpart
+         * of the first 8 palette colors, in addition to making them bold (legacy behavior)
+         * or if SGR 1 only enables bold and leaves the color intact.
+         *
+         * Since: 0.52
+         */
+        pspecs[PROP_BOLD_IS_BRIGHT] =
+                g_param_spec_boolean ("bold-is-bright", NULL, NULL,
+                                      FALSE,
+                                      (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
+
+        /**
+         * VteTerminal:cell-height-scale:
+         *
+         * Scale factor for the cell height, to increase line spacing. (The font's height is not affected.)
+         *
+         * Since: 0.52
+         */
+        pspecs[PROP_CELL_HEIGHT_SCALE] =
+                g_param_spec_double ("cell-height-scale", NULL, NULL,
+                                     VTE_CELL_SCALE_MIN,
+                                     VTE_CELL_SCALE_MAX,
+                                     1.,
+                                     (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
+
+        /**
+         * VteTerminal:cell-width-scale:
+         *
+         * Scale factor for the cell width, to increase letter spacing. (The font's width is not affected.)
+         *
+         * Since: 0.52
+         */
+        pspecs[PROP_CELL_WIDTH_SCALE] =
+                g_param_spec_double ("cell-width-scale", NULL, NULL,
+                                     VTE_CELL_SCALE_MIN,
+                                     VTE_CELL_SCALE_MAX,
+                                     1.,
+                                     (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
+
+        /**
          * VteTerminal:cjk-ambiguous-width:
          *
-         * This setting controls whether ambiguous-width characters are narrow or wide
-         * when using the UTF-8 encoding (vte_terminal_set_encoding()). In all other encodings,
-         * the width of ambiguous-width characters is fixed.
+         * This setting controls whether ambiguous-width characters are narrow or wide.
+         * (Note that when using a non-UTF-8 encoding set via vte_terminal_set_encoding(),
+         * the width of ambiguous-width characters is fixed and determined by the encoding
+         * itself.)
          *
          * This setting only takes effect the next time the terminal is reset, either
          * via escape sequence or with vte_terminal_reset().
@@ -1341,6 +1550,30 @@ vte_terminal_class_init(VteTerminalClass *klass)
                                    (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
 
         /**
+         * VteTerminal:enable-bidi:
+         *
+         * Controls whether or not the terminal will perform bidirectional text rendering.
+         *
+         * Since: 0.58
+         */
+        pspecs[PROP_ENABLE_BIDI] =
+                g_param_spec_boolean ("enable-bidi", NULL, NULL,
+                                      TRUE,
+                                      (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
+
+        /**
+         * VteTerminal:enable-shaping:
+         *
+         * Controls whether or not the terminal will shape Arabic text.
+         *
+         * Since: 0.58
+         */
+        pspecs[PROP_ENABLE_SHAPING] =
+                g_param_spec_boolean ("enable-shaping", NULL, NULL,
+                                      TRUE,
+                                      (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
+
+        /**
          * VteTerminal:font-scale:
          *
          * The terminal's font scale.
@@ -1359,6 +1592,9 @@ vte_terminal_class_init(VteTerminalClass *klass)
          * be encoded with.  For certain terminal types, applications executing in the
          * terminal can change the encoding.  The default is defined by the
          * application's locale settings.
+         *
+         * Deprecated: 0.54: Instead of using this, you should use a tool like
+         *   luit(1) when support for non-UTF-8 is required
          */
         pspecs[PROP_ENCODING] =
                 g_param_spec_string ("encoding", NULL, NULL,
@@ -1382,7 +1618,7 @@ vte_terminal_class_init(VteTerminalClass *klass)
         /**
          * VteTerminal:icon-title:
          *
-         * The terminal's so-called icon title, or %NULL if no icon title has been set.
+         * Deprecated: 0.54: This property is always %NULL.
          */
         pspecs[PROP_ICON_TITLE] =
                 g_param_spec_string ("icon-title", NULL, NULL,
@@ -1439,6 +1675,8 @@ vte_terminal_class_init(VteTerminalClass *klass)
          *
          * Controls whether or not the terminal will rewrap its contents, including
          * the scrollback buffer, whenever the terminal's width changes.
+         *
+         * Deprecated: 0.58
          */
         pspecs[PROP_REWRAP_ON_RESIZE] =
                 g_param_spec_boolean ("rewrap-on-resize", NULL, NULL,
@@ -1485,6 +1723,7 @@ vte_terminal_class_init(VteTerminalClass *klass)
                                       (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
 
         /**
+<<<<<<< HEAD
          * VteTerminal:sixel-enabled:
          *
          * Controls whether the SIXEL graphics feature is enabled.
@@ -1494,6 +1733,19 @@ vte_terminal_class_init(VteTerminalClass *klass)
                                       TRUE,
                                       (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
 
+=======
+         * VteTerminal:text-blink-mode:
+         *
+         * Controls whether or not the terminal will allow blinking text.
+         *
+         * Since: 0.52
+         */
+        pspecs[PROP_TEXT_BLINK_MODE] =
+                g_param_spec_enum ("text-blink-mode", NULL, NULL,
+                                   VTE_TYPE_TEXT_BLINK_MODE,
+                                   VTE_TEXT_BLINK_ALWAYS,
+                                   (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
+>>>>>>> origin/vte-0-58
 
         /**
          * VteTerminal:window-title:
@@ -1596,6 +1848,12 @@ const char *
 vte_get_features (void)
 {
         return
+#ifdef WITH_FRIBIDI
+                "+BIDI"
+#else
+                "-BIDI"
+#endif
+                " "
 #ifdef WITH_GNUTLS
                 "+GNUTLS"
 #else
@@ -1679,6 +1937,23 @@ vte_get_user_shell (void)
         return NULL;
 }
 
+/**
+ * vte_set_test_flags: (skip):
+ * @flags: flags
+ *
+ * Sets test flags. This function is only useful for implementing
+ * unit tests for vte itself; it is a no-op in non-debug builds.
+ *
+ * Since: 0.54
+ */
+void
+vte_set_test_flags(guint64 flags)
+{
+#ifdef VTE_DEBUG
+        g_test_flags = flags;
+#endif
+}
+
 /* VteTerminal public API */
 
 /**
@@ -1737,7 +2012,7 @@ vte_terminal_copy_clipboard_format(VteTerminal *terminal,
         g_return_if_fail(VTE_IS_TERMINAL(terminal));
         g_return_if_fail(format == VTE_FORMAT_TEXT || format == VTE_FORMAT_HTML);
 
-        IMPL(terminal)->widget_copy(VTE_SELECTION_CLIPBOARD, format);
+        WIDGET(terminal)->copy(VTE_SELECTION_CLIPBOARD, format);
 }
 
 /**
@@ -1752,7 +2027,7 @@ vte_terminal_copy_primary(VteTerminal *terminal)
 {
 	g_return_if_fail(VTE_IS_TERMINAL(terminal));
 	_vte_debug_print(VTE_DEBUG_SELECTION, "Copying to PRIMARY.\n");
-	IMPL(terminal)->widget_copy(VTE_SELECTION_PRIMARY, VTE_FORMAT_TEXT);
+	WIDGET(terminal)->copy(VTE_SELECTION_PRIMARY, VTE_FORMAT_TEXT);
 }
 
 /**
@@ -1760,8 +2035,7 @@ vte_terminal_copy_primary(VteTerminal *terminal)
  * @terminal: a #VteTerminal
  *
  * Sends the contents of the #GDK_SELECTION_CLIPBOARD selection to the
- * terminal's child.  If necessary, the data is converted from UTF-8 to the
- * terminal's current encoding. It's called on paste menu item, or when
+ * terminal's child. It's called on paste menu item, or when
  * user presses Shift+Insert.
  */
 void
@@ -1777,8 +2051,7 @@ vte_terminal_paste_clipboard(VteTerminal *terminal)
  * @terminal: a #VteTerminal
  *
  * Sends the contents of the #GDK_SELECTION_PRIMARY selection to the terminal's
- * child.  If necessary, the data is converted from UTF-8 to the terminal's
- * current encoding.  The terminal will call also paste the
+ * child. The terminal will call also paste the
  * #GDK_SELECTION_PRIMARY selection when the user clicks with the the second
  * mouse button.
  */
@@ -1787,7 +2060,7 @@ vte_terminal_paste_primary(VteTerminal *terminal)
 {
 	g_return_if_fail(VTE_IS_TERMINAL(terminal));
 	_vte_debug_print(VTE_DEBUG_SELECTION, "Pasting PRIMARY.\n");
-	IMPL(terminal)->widget_paste(GDK_SELECTION_PRIMARY);
+	WIDGET(terminal)->paste(GDK_SELECTION_PRIMARY);
 }
 
 /**
@@ -2021,7 +2294,7 @@ vte_terminal_event_check_gregex_simple(VteTerminal *terminal,
  * Sets which cursor the terminal will use if the pointer is over the pattern
  * specified by @tag.  The terminal keeps a reference to @cursor.
  *
- * Deprecated: 0.40: Use vte_terminal_match_set_cursor_type() or vte_terminal_match_set_cursor_named() instead.
+ * Deprecated: 0.40: Use vte_terminal_match_set_cursor_name() instead.
  */
 void
 vte_terminal_match_set_cursor(VteTerminal *terminal,
@@ -2040,6 +2313,8 @@ vte_terminal_match_set_cursor(VteTerminal *terminal,
  *
  * Sets which cursor the terminal will use if the pointer is over the pattern
  * specified by @tag.
+ *
+ * Deprecated: 0.54: Use vte_terminal_match_set_cursor_name() instead.
  */
 void
 vte_terminal_match_set_cursor_type(VteTerminal *terminal,
@@ -2281,6 +2556,8 @@ vte_terminal_unselect_all(VteTerminal *terminal)
  *
  * Reads the location of the insertion cursor and returns it.  The row
  * coordinate is absolute.
+ *
+ * This method is unaware of BiDi. The returned column is logical column.
  */
 void
 vte_terminal_get_cursor_position(VteTerminal *terminal,
@@ -2305,8 +2582,9 @@ vte_terminal_get_cursor_position(VteTerminal *terminal,
  * @cancellable: (allow-none): a #GCancellable, or %NULL
  * @error: (allow-none): return location for a #GError, or %NULL
  *
- * Creates a new #VtePty, and sets the emulation property
- * from #VteTerminal:emulation.
+ * Creates a new #VtePty, sets the emulation property
+ * from #VteTerminal:emulation, and sets the size using
+ * @terminal's size.
  *
  * See vte_pty_new() for more information.
  *
@@ -2323,6 +2601,8 @@ vte_terminal_pty_new_sync(VteTerminal *terminal,
         VtePty *pty = vte_pty_new_sync(flags, cancellable, error);
         if (pty == NULL)
                 return NULL;
+
+        vte_pty_set_size(pty, IMPL(terminal)->m_row_count, IMPL(terminal)->m_column_count, NULL);
 
         return pty;
 }
@@ -2389,6 +2669,10 @@ vte_terminal_watch_child (VteTerminal *terminal,
  * descriptor.
  *
  * See vte_pty_new(), g_spawn_async() and vte_terminal_watch_child() for more information.
+ *
+ * Beginning with 0.52, sets PWD to @working_directory in order to preserve symlink components.
+ * The caller should also make sure that symlinks were preserved while constructing the value of @working_directory,
+ * e.g. by using vte_terminal_get_current_directory_uri(), g_get_current_dir() or get_current_dir_name().
  *
  * Returns: %TRUE on success, or %FALSE on error with @error filled in
  *
@@ -2468,10 +2752,12 @@ spawn_async_cb (GObject *source,
 
         /* Automatically watch the child */
         if (terminal != nullptr) {
-                if (pid != -1)
+                if (pid != -1) {
+                        vte_terminal_set_pty(terminal, pty);
                         vte_terminal_watch_child(terminal, pid);
-                else
+                } else {
                         vte_terminal_set_pty(terminal, nullptr);
+                }
         } else {
                 if (pid != -1) {
                         vte_reaper_add_child(pid);
@@ -2536,8 +2822,8 @@ spawn_async_cb (GObject *source,
  * @child_setup_data_destroy: (destroy child_setup_data): a #GDestroyNotify for @child_setup_data, or %NULL
  * @timeout: a timeout value in ms, or -1 to wait indefinitely
  * @cancellable: (allow-none): a #GCancellable, or %NULL
- * @callback: a #VteTerminalSpawnAsyncCallback, or %NULL
- * @user_data: user data for @callback, or %NULL
+ * @callback: (scope async): a #VteTerminalSpawnAsyncCallback, or %NULL
+ * @user_data: (closure callback): user data for @callback, or %NULL
  *
  * A convenience function that wraps creating the #VtePty and spawning
  * the child process on it. See vte_pty_new_sync(), vte_pty_spawn_async(),
@@ -2556,6 +2842,10 @@ spawn_async_cb (GObject *source,
  * but taking care not to access the now-destroyed #VteTerminal. Note that
  * in this case, if spawning was successful, the child process will be aborted
  * automatically.
+ *
+ * Beginning with 0.52, sets PWD to @working_directory in order to preserve symlink components.
+ * The caller should also make sure that symlinks were preserved while constructing the value of @working_directory,
+ * e.g. by using vte_terminal_get_current_directory_uri(), g_get_current_dir() or get_current_dir_name().
  *
  * Since: 0.48
  */
@@ -2591,8 +2881,6 @@ vte_terminal_spawn_async(VteTerminal *terminal,
                 g_error_free(error);
                 return;
         }
-
-        vte_terminal_set_pty(terminal, pty);
 
         guint spawn_flags = (guint)spawn_flags_;
 
@@ -2638,7 +2926,7 @@ vte_terminal_feed(VteTerminal *terminal,
 /**
  * vte_terminal_feed_child:
  * @terminal: a #VteTerminal
- * @text: (element-type utf8) (allow-none): data to send to the child
+ * @text: (array length=length) (element-type gchar) (allow-none): data to send to the child
  * @length: length of @text in bytes, or -1 if @text is NUL-terminated
  *
  * Sends a block of UTF-8 text to the child as if it were entered by the user
@@ -2715,6 +3003,9 @@ warn_if_callback(VteSelectionFunc func)
  * is added to @attributes for each byte added to the returned string detailing
  * the character's position, colors, and other characteristics.
  *
+ * This method is unaware of BiDi. The columns returned in @attributes are
+ * logical columns.
+ *
  * Returns: (transfer full): a newly allocated text string, or %NULL.
  */
 char *
@@ -2726,7 +3017,6 @@ vte_terminal_get_text(VteTerminal *terminal,
 	g_return_val_if_fail(VTE_IS_TERMINAL(terminal), NULL);
         warn_if_callback(is_selected);
         auto text = IMPL(terminal)->get_text_displayed(true /* wrap */,
-                                                       false /* include trailing whitespace */,
                                                        attributes);
         if (text == nullptr)
                 return nullptr;
@@ -2744,11 +3034,14 @@ vte_terminal_get_text(VteTerminal *terminal,
  * %NULL, characters will only be read if @is_selected returns %TRUE after being
  * passed the column and row, respectively.  A #VteCharAttributes structure
  * is added to @attributes for each byte added to the returned string detailing
- * the character's position, colors, and other characteristics. This function
- * differs from vte_terminal_get_text() in that trailing spaces at the end of
- * lines are included.
+ * the character's position, colors, and other characteristics.
+ *
+ * This method is unaware of BiDi. The columns returned in @attributes are
+ * logical columns.
  *
  * Returns: (transfer full): a newly allocated text string, or %NULL.
+ *
+ * Deprecated: 0.56: Use vte_terminal_get_text() instead.
  */
 char *
 vte_terminal_get_text_include_trailing_spaces(VteTerminal *terminal,
@@ -2756,14 +3049,7 @@ vte_terminal_get_text_include_trailing_spaces(VteTerminal *terminal,
 					      gpointer user_data,
 					      GArray *attributes)
 {
-	g_return_val_if_fail(VTE_IS_TERMINAL(terminal), NULL);
-        warn_if_callback(is_selected);
-        auto text = IMPL(terminal)->get_text_displayed(true /* wrap */,
-                                                       true /* include trailing whitespace */,
-                                                       attributes);
-        if (text == nullptr)
-                return nullptr;
-        return (char*)g_string_free(text, FALSE);
+        return vte_terminal_get_text(terminal, is_selected, user_data, attributes);
 }
 
 /**
@@ -2785,6 +3071,9 @@ vte_terminal_get_text_include_trailing_spaces(VteTerminal *terminal,
  * entire scrollback buffer is scanned, so it is possible to read the entire
  * contents of the buffer using this function.
  *
+ * This method is unaware of BiDi. The columns passed in @start_col and @end_row,
+ * and returned in @attributes are logical columns.
+ *
  * Returns: (transfer full): a newly allocated text string, or %NULL.
  */
 char *
@@ -2803,7 +3092,6 @@ vte_terminal_get_text_range(VteTerminal *terminal,
                                              end_row, end_col,
                                              false /* block */,
                                              true /* wrap */,
-                                             true /* include trailing whitespace */,
                                              attributes);
         if (text == nullptr)
                 return nullptr;
@@ -2852,11 +3140,48 @@ vte_terminal_set_size(VteTerminal *terminal,
 }
 
 /**
+ * vte_terminal_get_text_blink_mode:
+ * @terminal: a #VteTerminal
+ *
+ * Checks whether or not the terminal will allow blinking text.
+ *
+ * Returns: the blinking setting
+ *
+ * Since: 0.52
+ */
+VteTextBlinkMode
+vte_terminal_get_text_blink_mode(VteTerminal *terminal)
+{
+        g_return_val_if_fail(VTE_IS_TERMINAL(terminal), VTE_TEXT_BLINK_ALWAYS);
+        return IMPL(terminal)->m_text_blink_mode;
+}
+
+/**
+ * vte_terminal_set_text_blink_mode:
+ * @terminal: a #VteTerminal
+ * @text_blink_mode: the #VteTextBlinkMode to use
+ *
+ * Controls whether or not the terminal will allow blinking text.
+ *
+ * Since: 0.52
+ */
+void
+vte_terminal_set_text_blink_mode(VteTerminal *terminal,
+                                     VteTextBlinkMode text_blink_mode)
+{
+        g_return_if_fail(VTE_IS_TERMINAL(terminal));
+
+        if (IMPL(terminal)->set_text_blink_mode(text_blink_mode))
+                g_object_notify_by_pspec(G_OBJECT(terminal), pspecs[PROP_TEXT_BLINK_MODE]);
+}
+
+/**
  * vte_terminal_get_allow_bold:
  * @terminal: a #VteTerminal
  *
- * Checks whether or not the terminal will attempt to draw bold text by
- * repainting text with a one-pixel offset.
+ * Checks whether or not the terminal will attempt to draw bold text,
+ * either by using a bold font variant or by repainting text with a different
+ * offset.
  *
  * Returns: %TRUE if bolding is enabled, %FALSE if not
  */
@@ -2875,7 +3200,6 @@ vte_terminal_get_allow_bold(VteTerminal *terminal)
  * Controls whether or not the terminal will attempt to draw bold text,
  * either by using a bold font variant or by repainting text with a different
  * offset.
- *
  */
 void
 vte_terminal_set_allow_bold(VteTerminal *terminal,
@@ -2978,16 +3302,58 @@ vte_terminal_set_backspace_binding(VteTerminal *terminal,
 }
 
 /**
+ * vte_terminal_get_bold_is_bright:
+ * @terminal: a #VteTerminal
+ *
+ * Checks whether the SGR 1 attribute also switches to the bright counterpart
+ * of the first 8 palette colors, in addition to making them bold (legacy behavior)
+ * or if SGR 1 only enables bold and leaves the color intact.
+ *
+ * Returns: %TRUE if bold also enables bright, %FALSE if not
+ *
+ * Since: 0.52
+ */
+gboolean
+vte_terminal_get_bold_is_bright(VteTerminal *terminal)
+{
+	g_return_val_if_fail(VTE_IS_TERMINAL(terminal), FALSE);
+	return IMPL(terminal)->m_bold_is_bright;
+}
+/**
+ * vte_terminal_set_bold_is_bright:
+ * @terminal: a #VteTerminal
+ * @bold_is_bright: %TRUE if bold should also enable bright
+ *
+ * Sets whether the SGR 1 attribute also switches to the bright counterpart
+ * of the first 8 palette colors, in addition to making them bold (legacy behavior)
+ * or if SGR 1 only enables bold and leaves the color intact.
+ *
+ * Since: 0.52
+ */
+void
+vte_terminal_set_bold_is_bright(VteTerminal *terminal,
+                                gboolean bold_is_bright)
+{
+        g_return_if_fail(VTE_IS_TERMINAL(terminal));
+
+        if (IMPL(terminal)->set_bold_is_bright(bold_is_bright != FALSE))
+                g_object_notify_by_pspec(G_OBJECT(terminal), pspecs[PROP_BOLD_IS_BRIGHT]);
+}
+
+/**
  * vte_terminal_get_char_height:
  * @terminal: a #VteTerminal
  *
  * Returns: the height of a character cell
+ *
+ * Note that this method should rather be called vte_terminal_get_cell_height,
+ * because the return value takes cell-height-scale into account.
  */
 glong
 vte_terminal_get_char_height(VteTerminal *terminal)
 {
 	g_return_val_if_fail(VTE_IS_TERMINAL(terminal), -1);
-	return IMPL(terminal)->get_char_height();
+	return IMPL(terminal)->get_cell_height();
 }
 
 /**
@@ -2995,20 +3361,25 @@ vte_terminal_get_char_height(VteTerminal *terminal)
  * @terminal: a #VteTerminal
  *
  * Returns: the width of a character cell
+ *
+ * Note that this method should rather be called vte_terminal_get_cell_width,
+ * because the return value takes cell-width-scale into account.
  */
 glong
 vte_terminal_get_char_width(VteTerminal *terminal)
 {
 	g_return_val_if_fail(VTE_IS_TERMINAL(terminal), -1);
-	return IMPL(terminal)->get_char_width();
+	return IMPL(terminal)->get_cell_width();
 }
 
 /**
  * vte_terminal_get_cjk_ambiguous_width:
  * @terminal: a #VteTerminal
  *
- * Returns whether ambiguous-width characters are narrow or wide when using
- * the UTF-8 encoding (vte_terminal_set_encoding()).
+ *  Returns whether ambiguous-width characters are narrow or wide.
+ * (Note that when using a non-UTF-8 encoding set via vte_terminal_set_encoding(),
+ * the width of ambiguous-width characters is fixed and determined by the encoding
+ * itself.)
  *
  * Returns: 1 if ambiguous-width characters are narrow, or 2 if they are wide
  */
@@ -3024,9 +3395,10 @@ vte_terminal_get_cjk_ambiguous_width(VteTerminal *terminal)
  * @terminal: a #VteTerminal
  * @width: either 1 (narrow) or 2 (wide)
  *
- * This setting controls whether ambiguous-width characters are narrow or wide
- * when using the UTF-8 encoding (vte_terminal_set_encoding()). In all other encodings,
- * the width of ambiguous-width characters is fixed.
+ * This setting controls whether ambiguous-width characters are narrow or wide.
+ * (Note that when using a non-UTF-8 encoding set via vte_terminal_set_encoding(),
+ * the width of ambiguous-width characters is fixed and determined by the encoding
+ * itself.)
  */
 void
 vte_terminal_set_cjk_ambiguous_width(VteTerminal *terminal, int width)
@@ -3284,21 +3656,22 @@ vte_terminal_get_column_count(VteTerminal *terminal)
  * vte_terminal_get_current_directory_uri:
  * @terminal: a #VteTerminal
  *
- * Returns: (transfer none): the URI of the current directory of the
+ * Returns: (nullable) (transfer none): the URI of the current directory of the
  *   process running in the terminal, or %NULL
  */
 const char *
 vte_terminal_get_current_directory_uri(VteTerminal *terminal)
 {
         g_return_val_if_fail(VTE_IS_TERMINAL(terminal), NULL);
-        return IMPL(terminal)->m_current_directory_uri;
+        auto impl = IMPL(terminal);
+        return impl->m_current_directory_uri.size() ? impl->m_current_directory_uri.data() : nullptr;
 }
 
 /**
  * vte_terminal_get_current_file_uri:
  * @terminal: a #VteTerminal
  *
- * Returns: (transfer none): the URI of the current file the
+ * Returns: (nullable) (transfer none): the URI of the current file the
  *   process running in the terminal is operating on, or %NULL if
  *   not set
  */
@@ -3306,7 +3679,8 @@ const char *
 vte_terminal_get_current_file_uri(VteTerminal *terminal)
 {
         g_return_val_if_fail(VTE_IS_TERMINAL(terminal), NULL);
-        return IMPL(terminal)->m_current_file_uri;
+        auto impl = IMPL(terminal);
+        return impl->m_current_file_uri.size() ? impl->m_current_file_uri.data() : nullptr;
 }
 
 /**
@@ -3398,19 +3772,93 @@ vte_terminal_set_delete_binding(VteTerminal *terminal,
 }
 
 /**
+ * vte_terminal_get_enable_bidi:
+ * @terminal: a #VteTerminal
+ *
+ * Checks whether the terminal performs bidirectional text rendering.
+ *
+ * Returns: %TRUE if BiDi is enabled, %FALSE if not
+ *
+ * Since: 0.58
+ */
+gboolean
+vte_terminal_get_enable_bidi(VteTerminal *terminal)
+{
+        g_return_val_if_fail(VTE_IS_TERMINAL(terminal), FALSE);
+        return IMPL(terminal)->m_enable_bidi;
+}
+
+/**
+ * vte_terminal_set_enable_bidi:
+ * @terminal: a #VteTerminal
+ * @enable_bidi: %TRUE to enable BiDi support
+ *
+ * Controls whether or not the terminal will perform bidirectional text rendering.
+ *
+ * Since: 0.58
+ */
+void
+vte_terminal_set_enable_bidi(VteTerminal *terminal,
+                             gboolean enable_bidi)
+{
+        g_return_if_fail(VTE_IS_TERMINAL(terminal));
+
+        if (IMPL(terminal)->set_enable_bidi(enable_bidi != FALSE))
+                g_object_notify_by_pspec(G_OBJECT(terminal), pspecs[PROP_ENABLE_BIDI]);
+}
+
+/**
+ * vte_terminal_get_enable_shaping:
+ * @terminal: a #VteTerminal
+ *
+ * Checks whether the terminal shapes Arabic text.
+ *
+ * Returns: %TRUE if Arabic shaping is enabled, %FALSE if not
+ *
+ * Since: 0.58
+ */
+gboolean
+vte_terminal_get_enable_shaping(VteTerminal *terminal)
+{
+        g_return_val_if_fail(VTE_IS_TERMINAL(terminal), FALSE);
+        return IMPL(terminal)->m_enable_shaping;
+}
+
+/**
+ * vte_terminal_set_enable_shaping:
+ * @terminal: a #VteTerminal
+ * @enable_shaping: %TRUE to enable Arabic shaping
+ *
+ * Controls whether or not the terminal will shape Arabic text.
+ *
+ * Since: 0.58
+ */
+void
+vte_terminal_set_enable_shaping(VteTerminal *terminal,
+                                gboolean enable_shaping)
+{
+        g_return_if_fail(VTE_IS_TERMINAL(terminal));
+
+        if (IMPL(terminal)->set_enable_shaping(enable_shaping != FALSE))
+                g_object_notify_by_pspec(G_OBJECT(terminal), pspecs[PROP_ENABLE_SHAPING]);
+}
+
+/**
  * vte_terminal_get_encoding:
  * @terminal: a #VteTerminal
  *
  * Determines the name of the encoding in which the terminal expects data to be
- * encoded.
+ * encoded, or %NULL if UTF-8 is in use.
  *
- * Returns: (transfer none): the current encoding for the terminal
+ * Returns: (nullable) (transfer none): the current encoding for the terminal
+ *
+ * Deprecated: 0.54: Support for non-UTF-8 is deprecated.
  */
 const char *
 vte_terminal_get_encoding(VteTerminal *terminal)
 {
 	g_return_val_if_fail(VTE_IS_TERMINAL(terminal), NULL);
-	return IMPL(terminal)->m_encoding;
+	return WIDGET(terminal)->encoding();
 }
 
 /**
@@ -3423,8 +3871,14 @@ vte_terminal_get_encoding(VteTerminal *terminal)
  * be encoded with.  For certain terminal types, applications executing in the
  * terminal can change the encoding. If @codeset is %NULL, it uses "UTF-8".
  *
+ * Note: Support for non-UTF-8 is deprecated and may get removed altogether.
+ * Instead of this function, you should use a wrapper like luit(1) when
+ * spawning the child process.
+ *
  * Returns: %TRUE if the encoding could be changed to the specified one,
  *  or %FALSE with @error set to %G_CONVERT_ERROR_NO_CONVERSION.
+ *
+ * Deprecated: 0.54: Support for non-UTF-8 is deprecated.
  */
 gboolean
 vte_terminal_set_encoding(VteTerminal *terminal,
@@ -3522,6 +3976,84 @@ vte_terminal_set_font_scale(VteTerminal *terminal,
                 g_object_notify_by_pspec(G_OBJECT(terminal), pspecs[PROP_FONT_SCALE]);
 }
 
+/**
+ * vte_terminal_get_cell_height_scale:
+ * @terminal: a #VteTerminal
+ *
+ * Returns: the terminal's cell height scale
+ *
+ * Since: 0.52
+ */
+double
+vte_terminal_get_cell_height_scale(VteTerminal *terminal)
+{
+        g_return_val_if_fail(VTE_IS_TERMINAL(terminal), 1.);
+
+        return IMPL(terminal)->m_cell_height_scale;
+}
+
+/**
+ * vte_terminal_set_cell_height_scale:
+ * @terminal: a #VteTerminal
+ * @scale: the cell height scale
+ *
+ * Sets the terminal's cell height scale to @scale.
+ *
+ * This can be used to increase the line spacing. (The font's height is not affected.)
+ * Valid values go from 1.0 (default) to 2.0 ("double spacing").
+ *
+ * Since: 0.52
+ */
+void
+vte_terminal_set_cell_height_scale(VteTerminal *terminal,
+                                   double scale)
+{
+        g_return_if_fail(VTE_IS_TERMINAL(terminal));
+
+        scale = CLAMP(scale, VTE_CELL_SCALE_MIN, VTE_CELL_SCALE_MAX);
+        if (IMPL(terminal)->set_cell_height_scale(scale))
+                g_object_notify_by_pspec(G_OBJECT(terminal), pspecs[PROP_CELL_HEIGHT_SCALE]);
+}
+
+/**
+ * vte_terminal_get_cell_width_scale:
+ * @terminal: a #VteTerminal
+ *
+ * Returns: the terminal's cell width scale
+ *
+ * Since: 0.52
+ */
+double
+vte_terminal_get_cell_width_scale(VteTerminal *terminal)
+{
+        g_return_val_if_fail(VTE_IS_TERMINAL(terminal), 1.);
+
+        return IMPL(terminal)->m_cell_width_scale;
+}
+
+/**
+ * vte_terminal_set_cell_width_scale:
+ * @terminal: a #VteTerminal
+ * @scale: the cell width scale
+ *
+ * Sets the terminal's cell width scale to @scale.
+ *
+ * This can be used to increase the letter spacing. (The font's width is not affected.)
+ * Valid values go from 1.0 (default) to 2.0.
+ *
+ * Since: 0.52
+ */
+void
+vte_terminal_set_cell_width_scale(VteTerminal *terminal,
+                                  double scale)
+{
+        g_return_if_fail(VTE_IS_TERMINAL(terminal));
+
+        scale = CLAMP(scale, VTE_CELL_SCALE_MIN, VTE_CELL_SCALE_MAX);
+        if (IMPL(terminal)->set_cell_width_scale(scale))
+                g_object_notify_by_pspec(G_OBJECT(terminal), pspecs[PROP_CELL_WIDTH_SCALE]);
+}
+
 /* Just some arbitrary minimum values */
 #define MIN_COLUMNS (16)
 #define MIN_ROWS    (2)
@@ -3540,6 +4072,8 @@ vte_terminal_set_font_scale(VteTerminal *terminal,
  * See gtk_window_set_geometry_hints() for more information.
  *
  * @terminal must be realized (see gtk_widget_get_realized()).
+ *
+ * Deprecated: 0.52
  */
 void
 vte_terminal_get_geometry_hints(VteTerminal *terminal,
@@ -3563,18 +4097,18 @@ vte_terminal_get_geometry_hints(VteTerminal *terminal,
 
         hints->base_width  = padding.left + padding.right;
         hints->base_height = padding.top  + padding.bottom;
-        hints->width_inc   = impl->m_char_width;
-        hints->height_inc  = impl->m_char_height;
+        hints->width_inc   = impl->m_cell_width;
+        hints->height_inc  = impl->m_cell_height;
         hints->min_width   = hints->base_width  + hints->width_inc  * min_columns;
         hints->min_height  = hints->base_height + hints->height_inc * min_rows;
 
 	_vte_debug_print(VTE_DEBUG_WIDGET_SIZE,
-                         "[Terminal %p] Geometry char       width %ld height %ld\n"
+                         "[Terminal %p] Geometry cell       width %ld height %ld\n"
                          "                       base       width %d height %d\n"
                          "                       increments width %d height %d\n"
                          "                       minimum    width %d height %d\n",
                          terminal,
-                         impl->m_char_width, impl->m_char_height,
+                         impl->m_cell_width, impl->m_cell_height,
                          hints->base_width, hints->base_height,
                          hints->width_inc, hints->height_inc,
                          hints->min_width, hints->min_height);
@@ -3589,6 +4123,8 @@ vte_terminal_get_geometry_hints(VteTerminal *terminal,
  * gtk_window_set_geometry_hints() for more information.
  *
  * @terminal must be realized (see gtk_widget_get_realized()).
+ *
+ * Deprecated: 0.52
  */
 void
 vte_terminal_set_geometry_hints_for_window(VteTerminal *terminal,
@@ -3626,20 +4162,21 @@ gboolean
 vte_terminal_get_has_selection(VteTerminal *terminal)
 {
 	g_return_val_if_fail(VTE_IS_TERMINAL(terminal), FALSE);
-	return IMPL(terminal)->m_has_selection;
+        return !IMPL(terminal)->m_selection_resolved.empty();
 }
 
 /**
  * vte_terminal_get_icon_title:
  * @terminal: a #VteTerminal
  *
- * Returns: (transfer none): the icon title
+ * Returns: (nullable) (transfer none): %NULL
+ *
+ * Deprecated: 0.54:
  */
 const char *
 vte_terminal_get_icon_title(VteTerminal *terminal)
 {
-	g_return_val_if_fail(VTE_IS_TERMINAL(terminal), "");
-	return IMPL(terminal)->m_icon_title;
+	return nullptr;
 }
 
 /**
@@ -3759,6 +4296,8 @@ vte_terminal_get_pty(VteTerminal *terminal)
  * Checks whether or not the terminal will rewrap its contents upon resize.
  *
  * Returns: %TRUE if rewrapping is enabled, %FALSE if not
+ *
+ * Deprecated: 0.58
  */
 gboolean
 vte_terminal_get_rewrap_on_resize(VteTerminal *terminal)
@@ -3774,6 +4313,8 @@ vte_terminal_get_rewrap_on_resize(VteTerminal *terminal)
  *
  * Controls whether or not the terminal will rewrap its contents, including
  * the scrollback history, whenever the terminal's width changes.
+ *
+ * Deprecated: 0.58
  */
 void
 vte_terminal_set_rewrap_on_resize(VteTerminal *terminal,
@@ -3830,6 +4371,22 @@ vte_terminal_set_scrollback_lines(VteTerminal *terminal, glong lines)
 }
 
 /**
+ * vte_terminal_get_scrollback_lines:
+ * @terminal: a #VteTerminal
+ *
+ * Returns: length of the scrollback buffer used by the terminal.
+ * A negative value means "infinite scrollback".
+ *
+ * Since: 0.52
+ */
+glong
+vte_terminal_get_scrollback_lines(VteTerminal *terminal)
+{
+        g_return_val_if_fail(VTE_IS_TERMINAL(terminal), 0);
+        return IMPL(terminal)->m_scrollback_lines;
+}
+
+/**
  * vte_terminal_set_scroll_on_keystroke:
  * @terminal: a #VteTerminal
  * @scroll: whether the terminal should scroll on keystrokes
@@ -3846,6 +4403,23 @@ vte_terminal_set_scroll_on_keystroke(VteTerminal *terminal,
 
         if (IMPL(terminal)->set_scroll_on_keystroke(scroll != FALSE))
                 g_object_notify_by_pspec(G_OBJECT(terminal), pspecs[PROP_SCROLL_ON_OUTPUT]);
+}
+
+/**
+ * vte_terminal_get_scroll_on_keystroke:
+ * @terminal: a #VteTerminal
+ *
+ * Returns: whether or not the terminal will forcibly scroll to the bottom of
+ * the viewable history when the user presses a key.  Modifier keys do not
+ * trigger this behavior.
+ *
+ * Since: 0.52
+ */
+gboolean
+vte_terminal_get_scroll_on_keystroke(VteTerminal *terminal)
+{
+    g_return_val_if_fail(VTE_IS_TERMINAL(terminal), FALSE);
+    return IMPL(terminal)->m_scroll_on_keystroke;
 }
 
 /**
@@ -3867,16 +4441,32 @@ vte_terminal_set_scroll_on_output(VteTerminal *terminal,
 }
 
 /**
+ * vte_terminal_get_scroll_on_output:
+ * @terminal: a #VteTerminal
+ *
+ * Returns: whether or not the terminal will forcibly scroll to the bottom of
+ * the viewable history when the new data is received from the child.
+ *
+ * Since: 0.52
+ */
+gboolean
+vte_terminal_get_scroll_on_output(VteTerminal *terminal)
+{
+    g_return_val_if_fail(VTE_IS_TERMINAL(terminal), FALSE);
+    return IMPL(terminal)->m_scroll_on_output;
+}
+
+/**
  * vte_terminal_get_window_title:
  * @terminal: a #VteTerminal
  *
- * Returns: (transfer none): the window title
+ * Returns: (nullable) (transfer none): the window title, or %NULL
  */
 const char *
 vte_terminal_get_window_title(VteTerminal *terminal)
 {
-	g_return_val_if_fail(VTE_IS_TERMINAL(terminal), "");
-	return IMPL(terminal)->m_window_title;
+	g_return_val_if_fail(VTE_IS_TERMINAL(terminal), nullptr);
+	return IMPL(terminal)->m_window_title.data();
 }
 
 /**
@@ -3889,7 +4479,7 @@ vte_terminal_get_window_title(VteTerminal *terminal)
  *
  * If %NULL, a built-in set is used.
  *
- * Returns: (transfer none): a string, or %NULL
+ * Returns: (nullable) (transfer none): a string, or %NULL
  *
  * Since: 0.40
  */
@@ -3898,7 +4488,8 @@ vte_terminal_get_word_char_exceptions(VteTerminal *terminal)
 {
         g_return_val_if_fail(VTE_IS_TERMINAL(terminal), NULL);
 
-        return IMPL(terminal)->m_word_char_exceptions_string;
+        auto impl = IMPL(terminal);
+        return impl->m_word_char_exceptions_string.empty() ? nullptr : impl->m_word_char_exceptions_string.data();
 }
 
 /**
@@ -3964,6 +4555,7 @@ vte_terminal_write_contents_sync (VteTerminal *terminal,
 }
 
 /**
+<<<<<<< HEAD
  * vte_terminal_set_freezed_image_limit:
  * @terminal: a #VteTerminal
  * @limit: 0 to G_MAXINT
@@ -4026,3 +4618,58 @@ vte_terminal_get_sixel_enabled (VteTerminal *terminal)
         return IMPL(terminal)->m_sixel_enabled;
 }
 
+=======
+ * vte_terminal_set_clear_background:
+ * @terminal: a #VteTerminal
+ * @setting:
+ *
+ * Sets whether to paint the background with the background colour.
+ * The default is %TRUE.
+ *
+ * This function is rarely useful. One use for it is to add a background
+ * image to the terminal.
+ *
+ * Since: 0.52
+ */
+void
+vte_terminal_set_clear_background(VteTerminal* terminal,
+                                  gboolean setting)
+{
+        g_return_if_fail(VTE_IS_TERMINAL(terminal));
+
+        IMPL(terminal)->set_clear_background(setting != FALSE);
+}
+
+/**
+ * vte_terminal_get_color_background_for_draw:
+ * @terminal: a #VteTerminal
+ * @color: (out): a location to store a #GdbRGBA color
+ *
+ * Returns the background colour, as used by @terminal when
+ * drawing the background, which may be different from
+ * the color set by vte_terminal_set_color_background().
+ *
+ * Note: you must only call this function while handling the
+ * GtkWidget::draw signal.
+ *
+ * This function is rarely useful. One use for it is if you disable
+ * drawing the background (see vte_terminal_set_clear_background())
+ * and then need to draw the background yourself.
+ *
+ * Since: 0.54
+ */
+void
+vte_terminal_get_color_background_for_draw(VteTerminal* terminal,
+                                           GdkRGBA* color)
+{
+        g_return_if_fail(VTE_IS_TERMINAL(terminal));
+        g_return_if_fail(color != nullptr);
+
+        auto impl = IMPL(terminal);
+        auto const c = impl->get_color(VTE_DEFAULT_BG);
+        color->red = c->red / 65535.;
+        color->green = c->green / 65535.;
+        color->blue = c->blue / 65535.;
+        color->alpha = impl->m_background_alpha;
+}
+>>>>>>> origin/vte-0-58

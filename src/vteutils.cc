@@ -18,10 +18,6 @@
 
 #include "config.h"
 
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE /* for O_TMPFILE */
-#endif
-
 #include "vteutils.h"
 
 #include <fcntl.h>
@@ -96,3 +92,16 @@ _vte_mkstemp (void)
 
         return fd;
 }
+
+#ifndef HAVE_STRCHRNUL
+/* Copied from glib */
+char *
+strchrnul (const char *s, int c)
+{
+        char *p = (char *) s;
+        while (*p && (*p != c))
+                ++p;
+
+        return p;
+}
+#endif /* !HAVE_STRCHRNUL */

@@ -33,6 +33,7 @@
 #include "vtetypes.hh"
 #include "vtespawn.hh"
 
+#include <assert.h>
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -75,6 +76,8 @@
 #endif
 
 #define VTE_VERSION_NUMERIC ((VTE_MAJOR_VERSION) * 10000 + (VTE_MINOR_VERSION) * 100 + (VTE_MICRO_VERSION))
+
+#define VTE_TERMINFO_NAME "xterm-256color"
 
 #if !GLIB_CHECK_VERSION(2, 42, 0)
 #define G_PARAM_EXPLICIT_NOTIFY 0
@@ -156,32 +159,60 @@ vte_pty_child_setup (VtePty *pty)
                 _exit(127);
         }
 
-	char *name = ptsname(masterfd);
-        if (name == nullptr) {
-		_vte_debug_print(VTE_DEBUG_PTY, "%s failed: %m\n", "ptsname");
+        /* Note: *not* O_CLOEXEC! */
+        auto const fd_flags = int{O_RDWR | ((priv->flags & VTE_PTY_NO_CTTY) ? O_NOCTTY : 0)};
+        auto fd = int{-1};
+
+#ifdef __linux__
+        fd = ioctl(masterfd, TIOCGPTPEER, fd_flags);
+        /* Note: According to the kernel's own tests (tools/testing/selftests/filesystems/devpts_pts.c),
+         * the error returned when the running kernel does not support this ioctl should be EINVAL.
+         * However it appears that the actual error returned is ENOTTY. So we check for both of them.
+         * See issue#182.
+         */
+        if (fd == -1 &&
+            errno != EINVAL &&
+            errno != ENOTTY) {
+		_vte_debug_print(VTE_DEBUG_PTY, "%s failed: %m\n", "ioctl(TIOCGPTPEER)");
 		_exit(127);
-	}
-
-        _vte_debug_print (VTE_DEBUG_PTY,
-                          "Setting up child pty: master FD = %d name = %s\n",
-                          masterfd, name);
-
-        int fd = open(name, O_RDWR);
-        if (fd == -1) {
-                _vte_debug_print (VTE_DEBUG_PTY, "Failed to open PTY: %m\n");
-                _exit(127);
         }
 
-	/* Start a new session and become process-group leader. */
+        /* Fall back to ptsname + open */
+#endif
+
+        if (fd == -1) {
+                auto const name = ptsname(masterfd);
+                if (name == nullptr) {
+                        _vte_debug_print(VTE_DEBUG_PTY, "%s failed: %m\n", "ptsname");
+                        _exit(127);
+                }
+
+                _vte_debug_print (VTE_DEBUG_PTY,
+                                  "Setting up child pty: master FD = %d name = %s\n",
+                                  masterfd, name);
+
+                fd = open(name, fd_flags);
+                if (fd == -1) {
+                        _vte_debug_print (VTE_DEBUG_PTY, "Failed to open PTY: %m\n");
+                        _exit(127);
+                }
+        }
+
+        assert(fd != -1);
+
 #if defined(HAVE_SETSID) && defined(HAVE_SETPGID)
-	_vte_debug_print (VTE_DEBUG_PTY, "Starting new session\n");
-	setsid();
-	setpgid(0, 0);
+        if (!(priv->flags & VTE_PTY_NO_SESSION)) {
+                /* Start a new session and become process-group leader. */
+                _vte_debug_print (VTE_DEBUG_PTY, "Starting new session\n");
+                setsid();
+                setpgid(0, 0);
+        }
 #endif
 
 #ifdef TIOCSCTTY
-	/* TIOCSCTTY is defined?  Let's try that, too. */
-	ioctl(fd, TIOCSCTTY, fd);
+        if (!(priv->flags & VTE_PTY_NO_CTTY)) {
+                ioctl(fd, TIOCSCTTY, fd);
+        }
 #endif
 
 #if defined(__sun) && defined(HAVE_STROPTS_H)
@@ -229,7 +260,7 @@ vte_pty_child_setup (VtePty *pty)
         /* Now set the TERM environment variable */
         /* FIXME: Setting environment here seems to have no effect, the merged envp2 will override on exec.
          * By the way, we'd need to set the one from there, if any. */
-        g_setenv("TERM", VTE_DEFAULT_TERM, TRUE);
+        g_setenv("TERM", VTE_TERMINFO_NAME, TRUE);
 
         char version[7];
         g_snprintf (version, sizeof (version), "%u", VTE_VERSION_NUMERIC);
@@ -256,6 +287,7 @@ vte_pty_child_setup (VtePty *pty)
  */
 static gchar **
 __vte_pty_merge_environ (char **envp,
+                         const char *directory,
                          gboolean inherit)
 {
 	GHashTable *table;
@@ -278,7 +310,7 @@ __vte_pty_merge_environ (char **envp,
 	}
 
         /* Make sure the one in envp overrides the default. */
-        g_hash_table_replace (table, g_strdup ("TERM"), g_strdup (VTE_DEFAULT_TERM));
+        g_hash_table_replace (table, g_strdup ("TERM"), g_strdup (VTE_TERMINFO_NAME));
 
 	if (envp != NULL) {
 		for (i = 0; envp[i] != NULL; i++) {
@@ -296,6 +328,13 @@ __vte_pty_merge_environ (char **envp,
 
 	/* Always set this ourself, not allowing replacing from envp */
 	g_hash_table_replace(table, g_strdup("COLORTERM"), g_strdup("truecolor"));
+
+        /* We need to put the working directory also in PWD, so that
+         * e.g. bash starts in the right directory if @directory is a symlink.
+         * See bug #502146 and #758452.
+         */
+        if (directory)
+                g_hash_table_replace(table, g_strdup("PWD"), g_strdup(directory));
 
 	array = g_ptr_array_sized_new (g_hash_table_size (table) + 1);
         g_hash_table_iter_init(&iter, table);
@@ -384,7 +423,7 @@ __vte_pty_spawn (VtePty *pty,
         spawn_flags &= ~VTE_SPAWN_NO_PARENT_ENVV;
 
         /* add the given environment to the childs */
-        envp2 = __vte_pty_merge_environ (envv, inherit_envv);
+        envp2 = __vte_pty_merge_environ (envv, directory, inherit_envv);
 
         _VTE_DEBUG_IF (VTE_DEBUG_MISC) {
                 g_printerr ("Spawning command:\n");
@@ -978,7 +1017,7 @@ vte_pty_new_sync (VtePtyFlags flags,
 
 /**
  * vte_pty_new_foreign_sync: (constructor)
- * @fd: (transfer full): a file descriptor to the PTY
+ * @fd: a file descriptor to the PTY
  * @cancellable: (allow-none): a #GCancellable, or %NULL
  * @error: (allow-none): return location for a #GError, or %NULL
  *
@@ -1009,8 +1048,9 @@ vte_pty_new_foreign_sync (int fd,
  * vte_pty_get_fd:
  * @pty: a #VtePty
  *
- * Returns: (transfer none): the file descriptor of the PTY master in @pty. The
- *   file descriptor belongs to @pty and must not be closed
+ * Returns: the file descriptor of the PTY master in @pty. The
+ *   file descriptor belongs to @pty and must not be closed of have
+ *   its flags changed
  */
 int
 vte_pty_get_fd (VtePty *pty)
@@ -1200,5 +1240,7 @@ vte_pty_spawn_finish(VtePty *pty,
                 *child_pid = *(GPid*)pidptr;
         if (error)
                 *error = nullptr;
+
+        g_free(pidptr);
         return TRUE;
 }

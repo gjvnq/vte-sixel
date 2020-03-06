@@ -53,7 +53,7 @@ typedef struct _VteCharAttributes       VteCharAttributes;
 struct _VteTerminal {
 	GtkWidget widget;
         /*< private >*/
-	gpointer *_unused_padding[1];
+	gpointer *_unused_padding[1]; /* FIXMEchpe: remove this field on the next ABI break */
 };
 
 /**
@@ -113,9 +113,9 @@ struct _VteTerminalClass {
 /* The structure we return as the supplemental attributes for strings. */
 struct _VteCharAttributes {
         /*< private >*/
-	long row, column;
+        long row, column;  /* logical column */
 	PangoColor fore, back;
-	guint underline:1, strikethrough:1;
+	guint underline:1, strikethrough:1, columns:4;
 };
 
 typedef gboolean (*VteSelectionFunc)(VteTerminal *terminal,
@@ -209,7 +209,24 @@ void vte_terminal_set_font_scale(VteTerminal *terminal,
 _VTE_PUBLIC
 gdouble vte_terminal_get_font_scale(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
 
+_VTE_PUBLIC
+void vte_terminal_set_cell_width_scale(VteTerminal *terminal,
+                                       double scale) _VTE_GNUC_NONNULL(1);
+_VTE_PUBLIC
+double vte_terminal_get_cell_width_scale(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
+
+_VTE_PUBLIC
+void vte_terminal_set_cell_height_scale(VteTerminal *terminal,
+                                        double scale) _VTE_GNUC_NONNULL(1);
+_VTE_PUBLIC
+double vte_terminal_get_cell_height_scale(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
+
 /* Set various on-off settings. */
+_VTE_PUBLIC
+void vte_terminal_set_text_blink_mode(VteTerminal *terminal,
+                                      VteTextBlinkMode text_blink_mode) _VTE_GNUC_NONNULL(1);
+_VTE_PUBLIC
+VteTextBlinkMode vte_terminal_get_text_blink_mode(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
 _VTE_PUBLIC
 void vte_terminal_set_audible_bell(VteTerminal *terminal,
                                    gboolean is_audible) _VTE_GNUC_NONNULL(1);
@@ -219,13 +236,12 @@ _VTE_PUBLIC
 void vte_terminal_set_scroll_on_output(VteTerminal *terminal,
                                        gboolean scroll) _VTE_GNUC_NONNULL(1);
 _VTE_PUBLIC
+gboolean vte_terminal_get_scroll_on_output(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
+_VTE_PUBLIC
 void vte_terminal_set_scroll_on_keystroke(VteTerminal *terminal,
 					  gboolean scroll);
 _VTE_PUBLIC
-void vte_terminal_set_rewrap_on_resize(VteTerminal *terminal,
-                                       gboolean rewrap) _VTE_GNUC_NONNULL(1);
-_VTE_PUBLIC
-gboolean vte_terminal_get_rewrap_on_resize(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
+gboolean vte_terminal_get_scroll_on_keystroke(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
 
 /* Set the color scheme. */
 _VTE_PUBLIC
@@ -277,6 +293,8 @@ VteCursorShape vte_terminal_get_cursor_shape(VteTerminal *terminal) _VTE_GNUC_NO
 _VTE_PUBLIC
 void vte_terminal_set_scrollback_lines(VteTerminal *terminal,
                                        glong lines) _VTE_GNUC_NONNULL(1);
+_VTE_PUBLIC
+glong vte_terminal_get_scrollback_lines(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
 
 /* Set or retrieve the current font. */
 _VTE_PUBLIC
@@ -289,6 +307,12 @@ void vte_terminal_set_allow_bold(VteTerminal *terminal,
                                  gboolean allow_bold) _VTE_GNUC_NONNULL(1);
 _VTE_PUBLIC
 gboolean vte_terminal_get_allow_bold(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
+
+_VTE_PUBLIC
+void vte_terminal_set_bold_is_bright(VteTerminal *terminal,
+                                     gboolean bold_is_bright) _VTE_GNUC_NONNULL(1);
+_VTE_PUBLIC
+gboolean vte_terminal_get_bold_is_bright(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
 
 _VTE_PUBLIC
 void vte_terminal_set_allow_hyperlink(VteTerminal *terminal,
@@ -307,6 +331,19 @@ void vte_terminal_set_backspace_binding(VteTerminal *terminal,
 _VTE_PUBLIC
 void vte_terminal_set_delete_binding(VteTerminal *terminal,
 				     VteEraseBinding binding) _VTE_GNUC_NONNULL(1);
+
+/* BiDi and shaping */
+_VTE_PUBLIC
+void vte_terminal_set_enable_bidi(VteTerminal *terminal,
+                                  gboolean enable_bidi) _VTE_GNUC_NONNULL(1);
+_VTE_PUBLIC
+gboolean vte_terminal_get_enable_bidi(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
+
+_VTE_PUBLIC
+void vte_terminal_set_enable_shaping(VteTerminal *terminal,
+                                     gboolean enable_shaping) _VTE_GNUC_NONNULL(1);
+_VTE_PUBLIC
+gboolean vte_terminal_get_enable_shaping(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
 
 /* Manipulate the autohide setting. */
 _VTE_PUBLIC
@@ -333,11 +370,6 @@ char *vte_terminal_get_text(VteTerminal *terminal,
 			    gpointer user_data,
 			    GArray *attributes) _VTE_GNUC_NONNULL(1) G_GNUC_MALLOC;
 _VTE_PUBLIC
-char *vte_terminal_get_text_include_trailing_spaces(VteTerminal *terminal,
-						    VteSelectionFunc is_selected,
-						    gpointer user_data,
-						    GArray *attributes) _VTE_GNUC_NONNULL(1) G_GNUC_MALLOC;
-_VTE_PUBLIC
 char *vte_terminal_get_text_range(VteTerminal *terminal,
 				  glong start_row, glong start_col,
 				  glong end_row, glong end_col,
@@ -360,10 +392,6 @@ int vte_terminal_match_add_regex(VteTerminal *terminal,
                                  VteRegex *regex,
                                  guint32 flags) _VTE_GNUC_NONNULL(1) _VTE_GNUC_NONNULL(2);
 /* Set the cursor to be used when the pointer is over a given match. */
-_VTE_PUBLIC
-void vte_terminal_match_set_cursor_type(VteTerminal *terminal,
-					int tag,
-                                        GdkCursorType cursor_type) _VTE_GNUC_NONNULL(1);
 _VTE_PUBLIC
 void vte_terminal_match_set_cursor_name(VteTerminal *terminal,
 					int tag,
@@ -406,14 +434,6 @@ _VTE_PUBLIC
 gboolean  vte_terminal_search_find_next       (VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
 
 
-/* Set the character encoding.  Most of the time you won't need this. */
-_VTE_PUBLIC
-gboolean vte_terminal_set_encoding(VteTerminal *terminal,
-                                   const char *codeset,
-                                   GError **error) _VTE_GNUC_NONNULL(1);
-_VTE_PUBLIC
-const char *vte_terminal_get_encoding(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
-
 /* CJK compatibility setting */
 _VTE_PUBLIC
 void vte_terminal_set_cjk_ambiguous_width(VteTerminal *terminal,
@@ -439,8 +459,6 @@ glong vte_terminal_get_column_count(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
 _VTE_PUBLIC
 const char *vte_terminal_get_window_title(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
 _VTE_PUBLIC
-const char *vte_terminal_get_icon_title(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
-_VTE_PUBLIC
 const char *vte_terminal_get_current_directory_uri(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
 _VTE_PUBLIC
 const char *vte_terminal_get_current_file_uri(VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
@@ -452,15 +470,13 @@ void vte_terminal_set_input_enabled (VteTerminal *terminal,
 _VTE_PUBLIC
 gboolean vte_terminal_get_input_enabled (VteTerminal *terminal) _VTE_GNUC_NONNULL(1);
 
-/* Window geometry helpers */
+/* rarely useful functions */
 _VTE_PUBLIC
-void vte_terminal_get_geometry_hints(VteTerminal *terminal,
-                                     GdkGeometry *hints,
-                                     int min_rows,
-                                     int min_columns) _VTE_GNUC_NONNULL(1) _VTE_GNUC_NONNULL(2);
+void vte_terminal_set_clear_background(VteTerminal* terminal,
+                                       gboolean setting) _VTE_GNUC_NONNULL(1);
 _VTE_PUBLIC
-void vte_terminal_set_geometry_hints_for_window(VteTerminal *terminal,
-                                                GtkWindow *window) _VTE_GNUC_NONNULL(1) _VTE_GNUC_NONNULL(2);
+void vte_terminal_get_color_background_for_draw(VteTerminal* terminal,
+                                                GdkRGBA* color) _VTE_GNUC_NONNULL(1) _VTE_GNUC_NONNULL(2);
 
 /* Writing contents out */
 _VTE_PUBLIC

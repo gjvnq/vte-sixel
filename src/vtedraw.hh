@@ -30,7 +30,6 @@
 G_BEGIN_DECLS
 
 #define VTE_DRAW_OPAQUE (1.0)
-#define VTE_DRAW_MAX_LENGTH 1024
 
 #define VTE_DRAW_NORMAL 0
 #define VTE_DRAW_BOLD   1
@@ -45,6 +44,8 @@ struct _vte_draw;
 struct _vte_draw_text_request {
 	vteunistr c;
 	gshort x, y, columns;
+        guint8 mirror : 1;      /* Char has RTL resolved directionality, mirror if mirrorable. */
+        guint8 box_mirror : 1;  /* Add box drawing chars to the set of mirrorable characters. */
 };
 
 guint _vte_draw_get_style(gboolean bold, gboolean italic);
@@ -56,18 +57,25 @@ void _vte_draw_free(struct _vte_draw *draw);
 void _vte_draw_set_cairo(struct _vte_draw *draw,
                          cairo_t *cr);
 
+void _vte_draw_clip(struct _vte_draw *draw,
+                    cairo_rectangle_int_t const* rect);
+
+void _vte_draw_unclip(struct _vte_draw *draw);
+
 void _vte_draw_clear(struct _vte_draw *draw,
 		     gint x, gint y, gint width, gint height,
                      vte::color::rgb const* color, double alpha);
 
 void _vte_draw_set_text_font(struct _vte_draw *draw,
                              GtkWidget *widget,
-			     const PangoFontDescription *fontdesc);
+                             const PangoFontDescription *fontdesc,
+                             double cell_width_scale, double cell_height_scale);
 void _vte_draw_get_text_metrics(struct _vte_draw *draw,
-				gint *width, gint *height, gint *ascent);
-int _vte_draw_get_char_width(struct _vte_draw *draw, vteunistr c, int columns,
-			     guint style);
-gboolean _vte_draw_has_bold (struct _vte_draw *draw, guint style);
+                                int *cell_width, int *cell_height,
+                                int *char_ascent, int *char_descent,
+                                GtkBorder *char_spacing);
+void _vte_draw_get_char_edges (struct _vte_draw *draw, vteunistr c, int columns, guint style,
+                               int *left, int *right);
 
 void _vte_draw_text(struct _vte_draw *draw,
 		    struct _vte_draw_text_request *requests, gsize n_requests,
@@ -89,6 +97,33 @@ void _vte_draw_draw_line(struct _vte_draw *draw,
                          int line_width,
                          vte::color::rgb const *color, double alpha);
 
+double
+_vte_draw_get_undercurl_height(gint width, double line_width);
+
+void
+_vte_draw_draw_undercurl(struct _vte_draw *draw,
+                         gint x, double y,
+                         double line_width,
+                         gint count,
+                         vte::color::rgb const *color, double alpha);
+
 G_END_DECLS
+
+class _vte_draw_autoclip_t {
+private:
+        struct _vte_draw* m_draw;
+public:
+        _vte_draw_autoclip_t(struct _vte_draw* draw,
+                             cairo_rectangle_int_t const* rect)
+                : m_draw{draw}
+        {
+                _vte_draw_clip(m_draw, rect);
+        }
+
+        ~_vte_draw_autoclip_t()
+        {
+                _vte_draw_unclip(m_draw);
+        }
+};
 
 #endif

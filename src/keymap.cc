@@ -24,7 +24,7 @@
 #include <string.h>
 #include <glib.h>
 #include <gtk/gtk.h>
-#include "caps.h"
+#include "caps.hh"
 #include "debug.h"
 #include "keymap.h"
 
@@ -770,7 +770,7 @@ _vte_keymap_map(guint keyval,
                                                   normal_length);
                 _vte_debug_print(VTE_DEBUG_KEYBOARD,
                                  " to '%s'.\n",
-                                 _vte_debug_sequence_to_string(*normal));
+                                 _vte_debug_sequence_to_string(*normal, *normal_length));
                 return;
 	}
 
