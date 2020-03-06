@@ -26,6 +26,7 @@
 
 #include <string.h>
 #include <new>
+#include <map>
 
 /*
  * Copy the common attributes from VteCellAttr to VteStreamCellAttr or vice versa.
@@ -72,18 +73,12 @@ Ring::Ring(row_t max_rows,
 	m_array = (VteRowData* ) g_malloc0 (sizeof (m_array[0]) * (m_mask + 1));
 
 	if (has_streams) {
-<<<<<<< HEAD
-		ring->attr_stream = _vte_file_stream_new ();
-		ring->text_stream = _vte_file_stream_new ();
-		ring->row_stream = _vte_file_stream_new ();
-		ring->image_stream = _vte_file_stream_new ();
-=======
 		m_attr_stream = _vte_file_stream_new ();
 		m_text_stream = _vte_file_stream_new ();
 		m_row_stream = _vte_file_stream_new ();
->>>>>>> origin/vte-0-58
+        m_img_stream = _vte_file_stream_new ();
 	} else {
-		m_attr_stream = m_text_stream = m_row_stream = nullptr;
+		m_attr_stream = m_text_stream = m_row_stream = m_img_stream = nullptr;
 	}
 
 	m_utf8_buffer = g_string_sized_new (128);
@@ -94,49 +89,50 @@ Ring::Ring(row_t max_rows,
         auto empty_str = g_string_new_len("", 0);
         g_ptr_array_add(m_hyperlinks, empty_str);
 
-<<<<<<< HEAD
-        ring->image_map = new (std::nothrow) std::map<gint, vte::image::image_object *>();
-        ring->image_onscreen_resource_counter = 0;
-        ring->image_offscreen_resource_counter = 0;
+// <<<<<<< HEAD
+        m_img_map = new (std::nothrow) std::map<gint, vte::image::image_object *>();
+        m_img_onscreen_resource_counter = 0;
+        m_img_offscreen_resource_counter = 0;
 
 	_vte_ring_validate(ring);
-=======
+// =======
 	validate();
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
 }
 
 Ring::~Ring()
 {
-<<<<<<< HEAD
+// <<<<<<< HEAD
 	gulong i;
-	auto image_map = ring->image_map;
-=======
+	auto image_map = m_img_map;
+// =======
 	for (size_t i = 0; i <= m_mask; i++)
 		_vte_row_data_fini (&m_array[i]);
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
 
 	g_free (m_array);
 
-<<<<<<< HEAD
+// <<<<<<< HEAD
 	g_free (ring->array);
 
 	/* Clear SIXEL images */
 	for (auto it = image_map->begin (); it != image_map->end (); ++it)
 		delete it->second;
 	image_map->clear();
-	delete ring->image_map;
+	delete m_img_map;
 
-	if (ring->has_streams) {
-		g_object_unref (ring->attr_stream);
-		g_object_unref (ring->text_stream);
-		g_object_unref (ring->row_stream);
-		g_object_unref (ring->image_stream);
-=======
+// 	if (ring->has_streams) {
+// 		g_object_unref (ring->attr_stream);
+// 		g_object_unref (ring->text_stream);
+// 		g_object_unref (ring->row_stream);
+// 		g_object_unref (ring->image_stream);
+// =======
 	if (m_has_streams) {
 		g_object_unref (m_attr_stream);
 		g_object_unref (m_text_stream);
 		g_object_unref (m_row_stream);
->>>>>>> origin/vte-0-58
+        g_object_unref (m_img_stream);
+// >>>>>>> origin/vte-0-58
 	}
 
 	g_string_free (m_utf8_buffer, TRUE);
@@ -609,17 +605,17 @@ Ring::reset_streams(row_t position)
 {
 	_vte_debug_print (VTE_DEBUG_RING, "Reseting streams to %lu.\n", position);
 
-<<<<<<< HEAD
-	if (ring->has_streams) {
-		_vte_stream_reset (ring->row_stream, position * sizeof (VteRowRecord));
-		_vte_stream_reset (ring->text_stream, _vte_stream_head (ring->text_stream));
-		_vte_stream_reset (ring->attr_stream, _vte_stream_head (ring->attr_stream));
-=======
+// <<<<<<< HEAD
+// 	if (ring->has_streams) {
+// 		_vte_stream_reset (ring->row_stream, position * sizeof (VteRowRecord));
+// 		_vte_stream_reset (ring->text_stream, _vte_stream_head (ring->text_stream));
+// 		_vte_stream_reset (ring->attr_stream, _vte_stream_head (ring->attr_stream));
+// =======
 	if (m_has_streams) {
 		_vte_stream_reset(m_row_stream, position * sizeof(RowRecord));
                 _vte_stream_reset(m_text_stream, _vte_stream_head(m_text_stream));
                 _vte_stream_reset(m_attr_stream, _vte_stream_head(m_attr_stream));
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
 	}
 
 	m_last_attr_text_start_offset = 0;
@@ -629,19 +625,19 @@ Ring::reset_streams(row_t position)
 Ring::row_t
 Ring::reset()
 {
-<<<<<<< HEAD
-	auto image_map = ring->image_map;
+// <<<<<<< HEAD
+	auto image_map = m_img_map;
 
-        _vte_debug_print (VTE_DEBUG_RING, "Reseting the ring at %lu.\n", ring->end);
-=======
+        // _vte_debug_print (VTE_DEBUG_RING, "Reseting the ring at %lu.\n", ring->end);
+// =======
         _vte_debug_print (VTE_DEBUG_RING, "Reseting the ring at %lu.\n", m_end);
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
 
         reset_streams(m_end);
         m_start = m_writable = m_end;
         m_cached_row_num = (row_t)-1;
 
-<<<<<<< HEAD
+// <<<<<<< HEAD
 	/* Clear SIXEL images */
 	for (auto it = image_map->begin (); it != image_map->end (); ++it)
 		delete it->second;
@@ -649,10 +645,10 @@ Ring::reset()
 	if (ring->has_streams)
 		_vte_stream_reset (ring->image_stream, _vte_stream_head (ring->image_stream));
 
-        return ring->end;
-=======
+        // return ring->end;
+// =======
         return m_end;
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
 }
 
 VteRowData const*
@@ -1457,7 +1453,7 @@ err:
 }
 
 
-<<<<<<< HEAD
+// <<<<<<< HEAD
 /**
  * _vte_ring_append_image:
  * @ring: a #VteRing
@@ -1476,7 +1472,7 @@ _vte_ring_append_image (VteRing *ring, cairo_surface_t *surface, gint pixelwidth
 {
 	using namespace vte::image;
 	image_object *image;
-	auto image_map = ring->image_map;
+	auto image_map = m_img_map;
 	gulong char_width, char_height;
 
 	g_assert_true (image_map != NULL);
@@ -1505,9 +1501,9 @@ _vte_ring_append_image (VteRing *ring, cairo_surface_t *surface, gint pixelwidth
 			 */
 			image_map->erase (image->get_bottom ());
 			if (current->is_freezed())
-				ring->image_offscreen_resource_counter -= current->resource_size ();
+				m_img_offscreen_resource_counter -= current->resource_size ();
 			else
-				ring->image_onscreen_resource_counter -= current->resource_size ();
+				m_img_onscreen_resource_counter -= current->resource_size ();
 			delete current;
 		} else if (current->includes (image)) {
 			/*
@@ -1521,13 +1517,13 @@ _vte_ring_append_image (VteRing *ring, cairo_surface_t *surface, gint pixelwidth
 			 *  +--------------+
 			 */
 			if (current->is_freezed()) {
-				ring->image_offscreen_resource_counter -= current->resource_size ();
+				m_img_offscreen_resource_counter -= current->resource_size ();
 				current->thaw ();
 			} else {
-				ring->image_onscreen_resource_counter -= current->resource_size ();
+				m_img_onscreen_resource_counter -= current->resource_size ();
 			}
 			current->combine (image, char_width, char_height);
-			ring->image_onscreen_resource_counter += current->resource_size ();
+			m_img_onscreen_resource_counter += current->resource_size ();
 			delete image;
 			goto end;
 		}
@@ -1560,9 +1556,9 @@ _vte_ring_append_image (VteRing *ring, cairo_surface_t *surface, gint pixelwidth
 			image->unite (image, char_width, char_height);
 			image_map->erase (current->get_bottom ());
 			if (current->is_freezed())
-				ring->image_offscreen_resource_counter -= current->resource_size ();
+				m_img_offscreen_resource_counter -= current->resource_size ();
 			else
-				ring->image_onscreen_resource_counter -= current->resource_size ();
+				m_img_onscreen_resource_counter -= current->resource_size ();
 			delete current;
 			goto end;
 		}
@@ -1578,7 +1574,7 @@ register_to_map:
 	 *  +----------+ <- bottom position (key)
 	 */
 	image_map->insert (std::make_pair (image->get_bottom (), image));
-	ring->image_onscreen_resource_counter += image->resource_size ();
+	m_img_onscreen_resource_counter += image->resource_size ();
 end:
 	/* noop */
 	;
@@ -1590,31 +1586,31 @@ _vte_ring_shrink_image_stream (VteRing *ring)
 	using namespace vte::image;
 	image_object *first_image;
 
-	if (ring->image_map->empty())
+	if (m_img_map->empty())
 		return;
 
-	first_image = ring->image_map->begin()->second;
+	first_image = m_img_map->begin()->second;
 
 	if (first_image->is_freezed ())
 		if (first_image->get_stream_position () > _vte_stream_tail (ring->image_stream))
 			_vte_stream_advance_tail (ring->image_stream, first_image->get_stream_position ());
 }
 
-static gboolean
-_vte_ring_write_row (VteRing *ring,
-		     GOutputStream *stream,
-		     VteRowData *row,
-		     VteWriteFlags flags,
-		     GCancellable *cancellable,
-		     GError **error)
-=======
+// static gboolean
+// _vte_ring_write_row (VteRing *ring,
+// 		     GOutputStream *stream,
+// 		     VteRowData *row,
+// 		     VteWriteFlags flags,
+// 		     GCancellable *cancellable,
+// 		     GError **error)
+// =======
 bool
 Ring::write_row(GOutputStream* stream,
                 VteRowData* row,
                 VteWriteFlags flags,
                 GCancellable* cancellable,
                 GError** error)
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
 {
 	VteCell *cell;
 	GString *buffer = m_utf8_buffer;

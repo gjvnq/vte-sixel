@@ -91,11 +91,11 @@ enum {
         PROP_SCROLLBACK_LINES,
         PROP_SCROLL_ON_KEYSTROKE,
         PROP_SCROLL_ON_OUTPUT,
-<<<<<<< HEAD
+// <<<<<<< HEAD
         PROP_SIXEL_ENABLED,
-=======
+// =======
         PROP_TEXT_BLINK_MODE,
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
         PROP_WINDOW_TITLE,
         PROP_WORD_CHAR_EXCEPTIONS,
         LAST_PROP,

@@ -4038,7 +4038,7 @@ Terminal::process_incoming()
 
 	_vte_debug_print (VTE_DEBUG_WORK, ")");
 	_vte_debug_print (VTE_DEBUG_IO,
-<<<<<<< HEAD
+// <<<<<<< HEAD
 			"%ld chars and %ld bytes in %" G_GSIZE_FORMAT " chunks left to process.\n",
 			(long) unichars->len,
 			(long) _vte_incoming_chunks_length(m_incoming),
@@ -4171,11 +4171,11 @@ VteTerminalPrivate::feed_chunks(struct _vte_incoming_chunk *chunks)
 	for (last = chunks; last->next != NULL; last = last->next) ;
 	last->next = m_incoming;
 	m_incoming = chunks;
-=======
+// =======
                           "%" G_GSIZE_FORMAT " bytes in %" G_GSIZE_FORMAT " chunks left to process.\n",
                           m_input_bytes,
                           m_incoming_queue.size());
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
 }
 
 bool
@@ -7877,13 +7877,16 @@ Terminal::set_font_scale(gdouble scale)
 }
 
 bool
-<<<<<<< HEAD
+// <<<<<<< HEAD
 VteTerminalPrivate::set_freezed_image_limit(gulong limit)
 {
         g_assert(limit >= 0);
 
         m_freezed_image_limit = limit;
-=======
+
+        return true;
+}
+// =======
 Terminal::set_cell_width_scale(double scale)
 {
         /* FIXME: compare old and new scale in pixel space */
@@ -7913,7 +7916,7 @@ Terminal::set_cell_height_scale(double scale)
         if (widget_realized()) {
                 ensure_font();
         }
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
 
         return true;
 }
@@ -8166,7 +8169,7 @@ Terminal::vadjustment_value_changed()
                 return;
 
         /* FIXME: do this check in pixel space */
-<<<<<<< HEAD
+// <<<<<<< HEAD
 	if (dy != 0) {
 		if (dy > 0.0) {
 			freeze_hidden_images_before_view_area (adj, adj - dy);
@@ -8174,9 +8177,9 @@ Terminal::vadjustment_value_changed()
 			freeze_hidden_images_after_view_area (adj, adj - dy);
 		}
 
-=======
+// =======
 	if (!_vte_double_equal(dy, 0)) {
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
 		_vte_debug_print(VTE_DEBUG_ADJ,
 			    "Scrolling by %f\n", dy);
                 invalidate_all();
@@ -8406,7 +8409,7 @@ Terminal::Terminal(vte::platform::Widget* w,
         m_allow_hyperlink = FALSE;
         m_hyperlink_auto_id = 0;
 
-<<<<<<< HEAD
+// <<<<<<< HEAD
         /* Image */
         m_freezed_image_limit = VTE_DEFAULT_FREEZED_IMAGE_LIMIT;
         m_sixel_enabled = TRUE;
@@ -8414,10 +8417,10 @@ Terminal::Terminal(vte::platform::Widget* w,
 	/* Not all backends generate GdkVisibilityNotify, so mark the
 	 * window as unobscured initially. */
 	m_visibility_state = GDK_VISIBILITY_UNOBSCURED;
-=======
+// =======
         /* Mouse */
         m_mouse_last_position = vte::view::coords(-1, -1);
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
 
         m_padding = default_padding;
         update_view_extents();
@@ -9936,12 +9939,12 @@ Terminal::widget_draw(cairo_t *cr)
         cairo_region_t *region;
         int allocated_width, allocated_height;
         int extra_area_for_cursor;
-<<<<<<< HEAD
+// <<<<<<< HEAD
         VteRing *ring = m_screen->row_data;
-=======
+// =======
         bool text_blink_enabled_now;
         gint64 now = 0;
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
 
         if (!gdk_cairo_get_clip_rectangle (cr, &clip_rect))
                 return;
@@ -10663,7 +10666,7 @@ Terminal::reset(bool clear_tabstops,
 	m_mouse_smooth_scroll_delta = 0.;
 	/* Clear modifiers. */
 	m_modifiers = 0;
-<<<<<<< HEAD
+// <<<<<<< HEAD
 	/* Reset miscellaneous stuff. */
 	m_bracketed_paste_mode = FALSE;
 	/* Reset SIXEL display mode */
@@ -10674,8 +10677,8 @@ Terminal::reset(bool clear_tabstops,
 	m_sixel_use_private_register = FALSE;
 	/* Reset SIXEL color register */
 	sixel_parser_set_default_color(&m_sixel_state);
-=======
->>>>>>> origin/vte-0-58
+// =======
+// >>>>>>> origin/vte-0-58
         /* Reset the saved cursor. */
         save_cursor(&m_normal_screen);
         save_cursor(&m_alternate_screen);

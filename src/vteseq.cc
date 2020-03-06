@@ -566,7 +566,7 @@ Terminal::set_mode_private(int mode,
 
                         switch_alternate_screen();
 
-<<<<<<< HEAD
+// <<<<<<< HEAD
 	if ((params != NULL) && (params->n_values > 0)) {
 		value = g_value_array_get_nth(params, 0);
 		if (G_VALUE_HOLDS_LONG(value)) {
@@ -829,7 +829,7 @@ vte_sequence_handler_decset_internal(VteTerminalPrivate *that,
 				  setting);
                 return;
 	}
-=======
+// =======
                         /* Clear the alternate screen */
                         if (mode == vte::terminal::modes::Private::eXTERM_OPT_ALTBUF_SAVE_CURSOR)
                                 clear_screen();
@@ -837,7 +837,7 @@ vte_sequence_handler_decset_internal(VteTerminalPrivate *that,
                         if (mode == vte::terminal::modes::Private::eXTERM_OPT_ALTBUF &&
                             m_screen == &m_alternate_screen)
                                 clear_screen();
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
 
                         switch_normal_screen();
 
@@ -1829,7 +1829,7 @@ Terminal::set_current_directory_uri(vte::parser::Sequence const& seq,
                                               vte::parser::StringTokeniser::const_iterator& token,
                                               vte::parser::StringTokeniser::const_iterator const& endtoken) noexcept
 {
-<<<<<<< HEAD
+// <<<<<<< HEAD
 	if (that->m_sixel_enabled) {
 		/* Claim to be a VT220 with SIXEL graphics support. */
 		that->feed_child("\e[?62;4c", -1);
@@ -1838,11 +1838,11 @@ Terminal::set_current_directory_uri(vte::parser::Sequence const& seq,
 		that->feed_child("\e[?62c", -1);
 	}
 }
-=======
+// =======
         std::string uri;
         if (token != endtoken && token.size_remaining() > 0) {
                 uri = token.string_remaining();
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
 
                 auto filename = g_filename_from_uri(uri.data(), nullptr, nullptr);
                 if (filename != nullptr) {
@@ -2006,7 +2006,7 @@ Terminal::GRAPHIC(vte::parser::Sequence const& seq)
 void
 Terminal::ACK(vte::parser::Sequence const& seq)
 {
-<<<<<<< HEAD
+// <<<<<<< HEAD
         guint idx;
         char *id = NULL;
         char idbuf[24];
@@ -2040,7 +2040,7 @@ Terminal::ACK(vte::parser::Sequence const& seq)
                                   uri);
                 uri[0] = '\0';
         }
-=======
+// =======
         /*
          * ACK - acknowledge
          *
@@ -2050,7 +2050,7 @@ Terminal::ACK(vte::parser::Sequence const& seq)
 
         m_bell_pending = true;
 }
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
 
 void
 Terminal::ACS(vte::parser::Sequence const& seq)
@@ -9043,7 +9043,7 @@ Terminal::XTERM_STCAP(vte::parser::Sequence const& seq)
          */
 }
 
-<<<<<<< HEAD
+// <<<<<<< HEAD
 /* graphics attributes */
 static void
 vte_sequence_handler_graphics_attributes(VteTerminalPrivate *that, GValueArray *params)
@@ -9095,7 +9095,7 @@ vte_sequence_handler_graphics_attributes(VteTerminalPrivate *that, GValueArray *
 }
 
 /* Lookup tables */
-=======
+// =======
 void
 Terminal::XTERM_WM(vte::parser::Sequence const& seq)
 {
@@ -9116,7 +9116,7 @@ Terminal::XTERM_WM(vte::parser::Sequence const& seq)
         #if 0
 	char buf[128];
         #endif
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
 
         int param = seq.collect1(0);
         switch (param) {

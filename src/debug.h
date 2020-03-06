@@ -50,22 +50,6 @@ typedef enum {
 	VTE_DEBUG_CURSOR	= 1 << 10,
 	VTE_DEBUG_KEYBOARD	= 1 << 11,
 	VTE_DEBUG_LIFECYCLE	= 1 << 12,
-<<<<<<< HEAD
-	VTE_DEBUG_MATCHER	= 1 << 13,
-	VTE_DEBUG_WORK		= 1 << 14,
-	VTE_DEBUG_CELLS		= 1 << 15,
-	VTE_DEBUG_TIMEOUT	= 1 << 16,
-	VTE_DEBUG_DRAW		= 1 << 17,
-	VTE_DEBUG_ALLY		= 1 << 18,
-	VTE_DEBUG_ADJ		= 1 << 19,
-	VTE_DEBUG_PANGOCAIRO    = 1 << 20,
-	VTE_DEBUG_WIDGET_SIZE   = 1 << 21,
-        VTE_DEBUG_STYLE         = 1 << 22,
-	VTE_DEBUG_RESIZE        = 1 << 23,
-        VTE_DEBUG_REGEX         = 1 << 24,
-        VTE_DEBUG_HYPERLINK     = 1 << 25,
-        VTE_DEBUG_IMAGE         = 1 << 26,
-=======
 	VTE_DEBUG_WORK		= 1 << 13,
 	VTE_DEBUG_CELLS		= 1 << 14,
 	VTE_DEBUG_TIMEOUT	= 1 << 15,
@@ -82,7 +66,6 @@ typedef enum {
         VTE_DEBUG_EMULATION     = 1 << 26,
         VTE_DEBUG_RINGVIEW      = 1 << 27,
         VTE_DEBUG_BIDI          = 1 << 28,
->>>>>>> origin/vte-0-58
 } VteDebugFlags;
 
 void _vte_debug_init(void);

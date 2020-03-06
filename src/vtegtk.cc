@@ -1723,7 +1723,7 @@ vte_terminal_class_init(VteTerminalClass *klass)
                                       (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
 
         /**
-<<<<<<< HEAD
+//<<<<<<< HEAD
          * VteTerminal:sixel-enabled:
          *
          * Controls whether the SIXEL graphics feature is enabled.
@@ -1733,7 +1733,8 @@ vte_terminal_class_init(VteTerminalClass *klass)
                                       TRUE,
                                       (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
 
-=======
+// =======
+        /**
          * VteTerminal:text-blink-mode:
          *
          * Controls whether or not the terminal will allow blinking text.
@@ -1745,7 +1746,7 @@ vte_terminal_class_init(VteTerminalClass *klass)
                                    VTE_TYPE_TEXT_BLINK_MODE,
                                    VTE_TEXT_BLINK_ALWAYS,
                                    (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY));
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
 
         /**
          * VteTerminal:window-title:
@@ -4618,7 +4619,8 @@ vte_terminal_get_sixel_enabled (VteTerminal *terminal)
         return IMPL(terminal)->m_sixel_enabled;
 }
 
-=======
+// =======
+/**
  * vte_terminal_set_clear_background:
  * @terminal: a #VteTerminal
  * @setting:
@@ -4672,4 +4674,4 @@ vte_terminal_get_color_background_for_draw(VteTerminal* terminal,
         color->blue = c->blue / 65535.;
         color->alpha = impl->m_background_alpha;
 }
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58

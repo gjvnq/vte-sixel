@@ -207,7 +207,7 @@ private:
          *  - 2 bytes repeating attr.hyperlink_length so that we can walk backwards.
          */
 	bool m_has_streams;
-	VteStream *m_attr_stream, *m_text_stream, *m_row_stream;
+	VteStream *m_attr_stream, *m_text_stream, *m_row_stream, *m_img_stream;
 	size_t m_last_attr_text_start_offset{0};
 	VteCellAttr m_last_attr;
 	GString *m_utf8_buffer;

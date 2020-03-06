@@ -136,6 +136,11 @@ typedef enum _VteCharacterReplacement {
         VTE_CHARACTER_REPLACEMENT_BRITISH
 } VteCharacterReplacement;
 
+typedef enum _VteKeymode {
+    VTE_KEYMODE_NORMAL,
+    VTE_KEYMODE_APPLICATION
+} VteKeymode;
+
 typedef struct _VtePaletteColor {
 	struct {
 		vte::color::rgb color;
@@ -1264,9 +1269,9 @@ public:
         inline int get_cursor_row1() const noexcept { return get_cursor_row() + 1; }
         inline void set_cursor_coords(vte::grid::row_t row /* relative to scrolling region */,
                                       vte::grid::column_t column);
-<<<<<<< HEAD
-        inline vte::grid::row_t get_cursor_row() const;
-        inline vte::grid::column_t get_cursor_column() const;
+// <<<<<<< HEAD
+        // inline vte::grid::row_t get_cursor_row() const;
+        // inline vte::grid::column_t get_cursor_column() const;
         inline void reset_scrolling_region();
         inline void set_scrolling_region(vte::grid::row_t start /* relative */,
                                          vte::grid::row_t end /* relative */);
@@ -1304,7 +1309,7 @@ public:
                                                       int osc,
                                                       char const *terminator);
         void seq_load_sixel(char const* p);
-=======
+// =======
         inline void set_cursor_coords1(vte::grid::row_t row /* relative to scrolling region */,
                                        vte::grid::column_t column); /* 1-based */
         inline vte::grid::row_t get_cursor_row_unclamped() const;
@@ -1334,7 +1339,7 @@ public:
                                    vte::grid::row_t end_row,
                                    vte::grid::column_t end_col);
 
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
         void subscribe_accessible_events();
         void select_text(vte::grid::column_t start_col,
                          vte::grid::row_t start_row,
@@ -1343,12 +1348,12 @@ public:
         void select_empty(vte::grid::column_t col,
                           vte::grid::row_t row);
 
-<<<<<<< HEAD
+// <<<<<<< HEAD
 private:
         void freeze_hidden_images_before_view_area(double start_pos, double end_pos);
         void freeze_hidden_images_after_view_area(double start_pos, double end_pos);
         void maybe_remove_images();
-=======
+// =======
         void send(vte::parser::u8SequenceBuilder const& builder,
                   bool c1 = true,
                   vte::parser::u8SequenceBuilder::Introducer introducer = vte::parser::u8SequenceBuilder::Introducer::DEFAULT,
@@ -1424,7 +1429,7 @@ private:
 #include "parser-cmd.hh"
 #undef _VTE_CMD
 #undef _VTE_NOP
->>>>>>> origin/vte-0-58
+// >>>>>>> origin/vte-0-58
 };
 
 } // namespace terminal
